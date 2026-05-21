@@ -21,11 +21,14 @@ Conventions
 """
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
     List,
+    Optional,
     Tuple,
     TypedDict,
 )
@@ -216,6 +219,84 @@ def ensure_log_table(table: str) -> None:
         .mode("overwrite")
         .saveAsTable(table)
     )
+
+
+def _now_iso() -> str:
+    """Return the current UTC time as an ISO 8601 string with microseconds.
+
+    Returns:
+        ``"YYYY-MM-DDTHH:MM:SS.ffffff+00:00"``.
+    """
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _serialize_args(args: Optional[Dict[str, Any]]) -> str:
+    """Serialize a child's args dict for storage in ``args_json``.
+
+    Uses ``default=str`` so unusual values (datetimes, paths) survive
+    without raising.
+
+    Args:
+        args: The child's args dict. ``None`` and ``{}`` both round-trip
+            to ``"{}"``.
+
+    Returns:
+        A compact JSON string.
+    """
+    return json.dumps(args or {}, default=str, sort_keys=True)
+
+
+def _skipped_result(
+    spec: ChildSpec,
+    *,
+    pipeline_run_id: str,
+    pipeline_name: str,
+    child_index: int,
+    orchestrator_notebook: str,
+) -> ChildResult:
+    """Build a ``ChildResult`` for a child that was skipped by ``fail_fast``.
+
+    Every NOT NULL log column gets a sensible default. ``started_at`` and
+    ``finished_at`` are set to the moment the skip is recorded — they are
+    not real durations.
+
+    Args:
+        spec: The child that did not run.
+        pipeline_run_id: UUID shared across the ``run_pipeline()`` call.
+        pipeline_name: Caller-supplied label.
+        child_index: Zero-based position in the input list.
+        orchestrator_notebook: Best-effort notebook name from runtime
+            context. Empty string if unavailable.
+
+    Returns:
+        A ``ChildResult`` with ``status="skipped"``.
+
+    Examples:
+        >>> r = _skipped_result(
+        ...     {"path": "/x"},
+        ...     pipeline_run_id="r", pipeline_name="p",
+        ...     child_index=0, orchestrator_notebook="",
+        ... )
+        >>> r["status"]
+        'skipped'
+    """
+    now: str = _now_iso()
+    return {
+        "pipeline_run_id": pipeline_run_id,
+        "pipeline_name": pipeline_name,
+        "child_index": child_index,
+        "notebook_path": spec["path"],
+        "status": "skipped",
+        "started_at": now,
+        "finished_at": now,
+        "duration_ms": 0,
+        "exit_value": "",
+        "args_json": _serialize_args(spec.get("args")),
+        "error_class": "",
+        "error_message": "",
+        "error_traceback": "",
+        "orchestrator_notebook": orchestrator_notebook,
+    }
 
 
 __all__ = [

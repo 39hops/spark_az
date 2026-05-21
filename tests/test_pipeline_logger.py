@@ -100,3 +100,31 @@ def test_nbutils_raises_when_neither_module_present(
 
     with pytest.raises(RuntimeError, match="mssparkutils"):
         _nbutils()
+
+
+def test_skipped_result_has_expected_fields() -> None:
+    from spark_az.pipeline_logger import ChildSpec, _skipped_result
+
+    spec: ChildSpec = {"path": "/notebooks/load", "args": {"k": "v"}}
+    result = _skipped_result(
+        spec,
+        pipeline_run_id="run-1",
+        pipeline_name="nightly",
+        child_index=2,
+        orchestrator_notebook="/notebooks/orch",
+    )
+
+    assert result["status"] == "skipped"
+    assert result["pipeline_run_id"] == "run-1"
+    assert result["pipeline_name"] == "nightly"
+    assert result["child_index"] == 2
+    assert result["notebook_path"] == "/notebooks/load"
+    assert result["duration_ms"] == 0
+    assert result["exit_value"] == ""
+    assert result["args_json"] == '{"k": "v"}'
+    assert result["error_class"] == ""
+    assert result["error_message"] == ""
+    assert result["error_traceback"] == ""
+    assert result["orchestrator_notebook"] == "/notebooks/orch"
+    assert result["started_at"] == result["finished_at"]
+    assert result["started_at"] != ""
