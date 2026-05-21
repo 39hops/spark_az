@@ -51,7 +51,40 @@ authoring, not a parallel orchestrator, not a step-grained event logger.
   the top).
 - **Local testing without Synapse.** `tests/conftest.py` provides a
   `fake_mssparkutils` fixture and a local Delta-enabled `SparkSession`
-  fixture; 30 unit tests + 4 Delta integration tests = 34 tests passing.
+  fixture; 43 unit tests + 4 Delta integration tests = 47 tests passing.
+- **JSON-structured log lines.** `set_json_formatter()` swaps the
+  module logger's formatter to `JsonFormatter`. Each `log.info(...)`
+  becomes one JSON object on stdout with `ts`, `level`, `logger`,
+  `msg`, and any of `pipeline_run_id`, `pipeline_name`, `child_index`,
+  `step`, `phase`, `duration_ms`, `error_class`, `error_message`
+  attached via record extras.
+- **Application Insights fan-out.**
+  `enable_app_insights(connection_string)` attaches an Azure Monitor
+  OpenTelemetry handler to the module logger via the optional
+  `azure-monitor-opentelemetry` dependency. Raises with install
+  instructions if missing. Idempotent.
+- **`step(name, **attrs)` context manager.** Times its body and emits
+  start / ok-or-failed structured log records carrying the active
+  `pipeline_run_id`. `step_ctx.metric(key, value)` accumulates values
+  into the success record. Currently logs only — no separate Delta
+  table for step rows yet (deferred to v3).
+- **`PipelineParams` typed helper.** `read_pipeline_params(...)`
+  validates Synapse-passed args (required `pipeline_name`,
+  `log_table`, well-formed `notebooks`) and returns a
+  `PipelineParams` TypedDict. Raises `ValueError` on bad inputs so
+  misconfigured pipelines fail at the parameters cell.
+- **`pipeline_run_id` injection.** `run_pipeline` accepts an optional
+  `pipeline_run_id` parameter; when provided (e.g. from
+  `@pipeline().RunId`), uses it instead of generating a UUID. Sets it
+  as the active id for `step()` records during the call.
+- **Drop-in starter notebook.** `notebooks/pipeline_starter.ipynb`
+  bundles JSON logging, optional App Insights, `read_pipeline_params`
+  validation, an optional `step()` example, and the `run_pipeline`
+  call. Importable into Synapse as a Notebook activity target.
+- **Reference Synapse pipeline JSON.** `synapse/pipeline_template.json`
+  is a complete Synapse pipeline definition wiring the starter
+  notebook with `@pipeline().RunId` / `@pipeline().Pipeline` and a
+  sample `notebooks` array. Importable directly into Synapse Studio.
 
 ## What is partially implemented or roadmap
 

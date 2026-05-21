@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Set, get_type_hints
 
+import json
 import sys
 
 import pytest
@@ -512,12 +513,222 @@ def test_public_api_reexported_from_package_root() -> None:
     expected: List[str] = [
         "ChildResult",
         "ChildSpec",
+        "JsonFormatter",
+        "PipelineParams",
+        "enable_app_insights",
         "ensure_log_table",
+        "get_active_run_id",
         "get_spark",
+        "log",
+        "read_pipeline_params",
         "run_child",
         "run_pipeline",
+        "set_active_run_id",
+        "set_json_formatter",
         "set_spark",
+        "step",
     ]
     for name in expected:
         assert hasattr(spark_az, name), f"spark_az missing {name}"
     assert set(spark_az.__all__) == set(expected)
+
+
+def test_json_formatter_basic_fields() -> None:
+    from spark_az.pipeline_logger import JsonFormatter
+
+    fmt: JsonFormatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="test", level=logging.INFO, pathname="", lineno=0,
+        msg="hello", args=(), exc_info=None,
+    )
+    payload: Dict[str, Any] = json.loads(fmt.format(record))
+    assert payload["msg"] == "hello"
+    assert payload["level"] == "INFO"
+    assert payload["logger"] == "test"
+    assert "ts" in payload
+
+
+def test_json_formatter_includes_extras() -> None:
+    from spark_az.pipeline_logger import JsonFormatter
+
+    fmt: JsonFormatter = JsonFormatter()
+    record = logging.LogRecord(
+        name="test", level=logging.INFO, pathname="", lineno=0,
+        msg="step done", args=(), exc_info=None,
+    )
+    record.step = "extract"
+    record.duration_ms = 1230
+    record.pipeline_run_id = "r-1"
+    payload: Dict[str, Any] = json.loads(fmt.format(record))
+    assert payload["step"] == "extract"
+    assert payload["duration_ms"] == 1230
+    assert payload["pipeline_run_id"] == "r-1"
+
+
+def test_set_json_formatter_swaps_default_handler() -> None:
+    from spark_az.pipeline_logger import (
+        JsonFormatter,
+        _HANDLER_NAME,
+        log,
+        set_json_formatter,
+    )
+
+    set_json_formatter()
+    default_handlers = [h for h in log.handlers if h.get_name() == _HANDLER_NAME]
+    assert len(default_handlers) == 1
+    assert isinstance(default_handlers[0].formatter, JsonFormatter)
+
+
+def test_set_json_formatter_idempotent() -> None:
+    from spark_az.pipeline_logger import _HANDLER_NAME, log, set_json_formatter
+
+    set_json_formatter()
+    set_json_formatter()
+    handlers = [h for h in log.handlers if h.get_name() == _HANDLER_NAME]
+    assert len(handlers) == 1
+
+
+def test_enable_app_insights_missing_dep_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import builtins as _builtins
+
+    real_import = _builtins.__import__
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name.startswith("azure.monitor.opentelemetry"):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(_builtins, "__import__", fake_import)
+    from spark_az import pipeline_logger as pl
+
+    monkeypatch.setattr(pl, "_APP_INSIGHTS_ENABLED", False, raising=False)
+    with pytest.raises(ImportError, match="azure-monitor-opentelemetry"):
+        pl.enable_app_insights("InstrumentationKey=fake")
+
+
+def test_step_emits_start_and_ok(caplog: pytest.LogCaptureFixture) -> None:
+    from spark_az.pipeline_logger import log, step
+
+    with caplog.at_level(logging.INFO, logger=log.name):
+        with step("extract", source="lab.raw") as s:
+            s.metric("rows_in", 100)
+
+    records = [r for r in caplog.records if getattr(r, "step", None) == "extract"]
+    phases = [getattr(r, "phase", "") for r in records]
+    assert "start" in phases
+    assert "ok" in phases
+    ok = next(r for r in records if getattr(r, "phase", "") == "ok")
+    assert getattr(ok, "rows_in", None) == 100
+    assert getattr(ok, "duration_ms", -1) >= 0
+
+
+def test_step_emits_failed_and_reraises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from spark_az.pipeline_logger import log, step
+
+    with caplog.at_level(logging.INFO, logger=log.name):
+        with pytest.raises(ValueError, match="bad"):
+            with step("transform"):
+                raise ValueError("bad")
+
+    records = [r for r in caplog.records if getattr(r, "step", None) == "transform"]
+    phases = [getattr(r, "phase", "") for r in records]
+    assert "failed" in phases
+    failed = next(r for r in records if getattr(r, "phase", "") == "failed")
+    assert getattr(failed, "error_class", "") == "ValueError"
+    assert "bad" in getattr(failed, "error_message", "")
+
+
+def test_step_uses_active_run_id(caplog: pytest.LogCaptureFixture) -> None:
+    from spark_az.pipeline_logger import log, set_active_run_id, step
+
+    set_active_run_id("r-test")
+    with caplog.at_level(logging.INFO, logger=log.name):
+        with step("noop"):
+            pass
+
+    recs = [r for r in caplog.records if getattr(r, "step", None) == "noop"]
+    assert recs
+    assert all(getattr(r, "pipeline_run_id", None) == "r-test" for r in recs)
+
+
+def test_read_pipeline_params_happy_path() -> None:
+    from spark_az.pipeline_logger import read_pipeline_params
+
+    params = read_pipeline_params(
+        pipeline_name="nightly",
+        log_table="lab.__pipeline_runlog",
+        notebooks=[{"path": "/x"}, {"path": "/y", "args": {"d": 1}}],
+        pipeline_run_id="r-1",
+        extras={"job_id": "j-7"},
+    )
+    assert params["pipeline_name"] == "nightly"
+    assert params["log_table"] == "lab.__pipeline_runlog"
+    assert params["notebooks"] == [{"path": "/x"}, {"path": "/y", "args": {"d": 1}}]
+    assert params["pipeline_run_id"] == "r-1"
+    assert params["extras"] == {"job_id": "j-7"}
+    assert params["fail_fast"] is True
+
+
+def test_read_pipeline_params_raises_on_empty_pipeline_name() -> None:
+    from spark_az.pipeline_logger import read_pipeline_params
+
+    with pytest.raises(ValueError, match="pipeline_name"):
+        read_pipeline_params(pipeline_name="", log_table="t", notebooks=[])
+
+
+def test_read_pipeline_params_raises_on_bad_notebooks() -> None:
+    from spark_az.pipeline_logger import read_pipeline_params
+
+    with pytest.raises(ValueError, match="path"):
+        read_pipeline_params(
+            pipeline_name="p",
+            log_table="t",
+            notebooks=[{"path": "/x"}, {"timeout_seconds": 60}],
+        )
+
+
+def test_run_pipeline_accepts_injected_run_id(
+    fake_mssparkutils: Any,
+) -> None:
+    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+
+    fake_mssparkutils.notebook.handler = lambda p, t, a: "ok"
+    results = run_pipeline(
+        [{"path": "/x"}],
+        log_table="t",
+        pipeline_name="p",
+        write_log=False,
+        pipeline_run_id="injected-run-id",
+    )
+    assert results[0]["pipeline_run_id"] == "injected-run-id"
+
+
+def test_run_pipeline_sets_and_clears_active_run_id(
+    fake_mssparkutils: Any,
+) -> None:
+    from spark_az.pipeline_logger import (
+        ChildSpec,
+        get_active_run_id,
+        run_pipeline,
+    )
+
+    captured: List[Any] = []
+
+    def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
+        captured.append(get_active_run_id())
+        return "ok"
+
+    fake_mssparkutils.notebook.handler = handler
+    run_pipeline(
+        [{"path": "/x"}],
+        log_table="t",
+        pipeline_name="p",
+        write_log=False,
+        pipeline_run_id="r-active",
+    )
+    assert captured == ["r-active"]
+    assert get_active_run_id() is None

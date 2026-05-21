@@ -112,6 +112,15 @@ def _reset_spark_registration(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _reset_pipeline_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset pipeline_logger module-level singletons between tests."""
+    from spark_az import pipeline_logger as pl
+
+    monkeypatch.setattr(pl, "_active_run_id", None, raising=False)
+    monkeypatch.setattr(pl, "_APP_INSIGHTS_ENABLED", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _propagate_pipeline_logger_to_caplog(
     caplog: pytest.LogCaptureFixture,
 ) -> Any:

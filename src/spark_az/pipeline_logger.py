@@ -8,18 +8,27 @@ Public API
 ----------
 - :class:`ChildSpec` — describes one child notebook to run.
 - :class:`ChildResult` — describes one row written to the log table.
+- :class:`PipelineParams` — validated Synapse-passed parameter bag.
 - :func:`ensure_log_table` — idempotent log-table creation.
+- :func:`read_pipeline_params` — validate + build a ``PipelineParams``.
 - :func:`run_child` — run one child; never raises.
 - :func:`run_pipeline` — run many in sequence with batched logging.
+- :func:`step` — context manager for in-orchestrator structured timing.
+- :class:`JsonFormatter` + :func:`set_json_formatter` — opt-in JSON
+  log lines on stdout.
+- :func:`enable_app_insights` — opt-in Azure App Insights / Log
+  Analytics fan-out via ``azure-monitor-opentelemetry``.
+- :func:`set_active_run_id` / :func:`get_active_run_id` — module
+  singleton consulted by ``step`` and set automatically by
+  ``run_pipeline``.
 
 Conventions
 -----------
 - The log table is a managed Delta table (e.g. ``"lab.__pipeline_runlog"``).
 - Per-child output goes through ``logging.Logger`` ``spark_az.pipeline_logger``
-  at ``INFO``; attach an ``AzureLogHandler`` to fan out to Application
-  Insights without touching this module.
-- ``mssparkutils.notebook.run`` is blocking; orchestration is sequential
-  in v1.
+  at ``INFO``; attach an ``AzureLogHandler`` (or call
+  :func:`enable_app_insights`) to fan out without touching this module.
+- ``mssparkutils.notebook.run`` is blocking; orchestration is sequential.
 """
 from __future__ import annotations
 
@@ -29,12 +38,14 @@ import os
 import time
 import traceback
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
     Iterable,
+    Iterator,
     List,
     Optional,
     Tuple,
@@ -590,6 +601,7 @@ def run_pipeline(
     fail_fast: bool = True,
     default_timeout_seconds: int = 1800,
     write_log: bool = True,
+    pipeline_run_id: Optional[str] = None,
 ) -> List[ChildResult]:
     """Run a sequence of child notebooks and log each one.
 
@@ -660,7 +672,8 @@ def run_pipeline(
     """
     _nbutils()
 
-    pipeline_run_id: str = str(uuid.uuid4())
+    resolved_run_id: str = pipeline_run_id or str(uuid.uuid4())
+    set_active_run_id(resolved_run_id)
     orchestrator: str = _orchestrator_notebook_name()
     spec_list: List[ChildSpec] = list(children)
     results: List[ChildResult] = []
@@ -671,7 +684,7 @@ def run_pipeline(
             if first_failure is not None and fail_fast:
                 skipped: ChildResult = _skipped_result(
                     spec,
-                    pipeline_run_id=pipeline_run_id,
+                    pipeline_run_id=resolved_run_id,
                     pipeline_name=pipeline_name,
                     child_index=i,
                     orchestrator_notebook=orchestrator,
@@ -681,7 +694,7 @@ def run_pipeline(
                 continue
             result: ChildResult = run_child(
                 spec,
-                pipeline_run_id=pipeline_run_id,
+                pipeline_run_id=resolved_run_id,
                 pipeline_name=pipeline_name,
                 child_index=i,
                 default_timeout_seconds=default_timeout_seconds,
@@ -691,6 +704,7 @@ def run_pipeline(
             if result["status"] != "ok" and first_failure is None:
                 first_failure = result
     finally:
+        set_active_run_id(None)
         if write_log:
             ensure_log_table(log_table)
             _append_rows(log_table, results)
@@ -706,12 +720,356 @@ def run_pipeline(
     return results
 
 
+_active_run_id: Optional[str] = None
+
+
+def set_active_run_id(run_id: Optional[str]) -> None:
+    """Set or clear the ``pipeline_run_id`` auto-attached to step records.
+
+    :func:`run_pipeline` sets this for the duration of its call so any
+    :func:`step` invocations inside children automatically carry the
+    same run id. Direct callers (orchestrator notebooks that use
+    :func:`step` without :func:`run_pipeline`) can set it themselves.
+
+    Args:
+        run_id: A UUID string, or ``None`` to clear.
+    """
+    global _active_run_id
+    _active_run_id = run_id
+
+
+def get_active_run_id() -> Optional[str]:
+    """Return the pipeline_run_id currently attached to step records.
+
+    Returns:
+        The active run id, or ``None`` if none is set.
+    """
+    return _active_run_id
+
+
+_JSON_RECORD_KEYS: Tuple[str, ...] = (
+    "pipeline_run_id",
+    "pipeline_name",
+    "child_index",
+    "step",
+    "phase",
+    "duration_ms",
+    "error_class",
+    "error_message",
+)
+
+
+class JsonFormatter(logging.Formatter):
+    """:class:`logging.Formatter` that emits one JSON object per record.
+
+    Always-present fields: ``ts`` (ISO 8601 UTC), ``level``, ``logger``,
+    ``msg``. Any of ``pipeline_run_id``, ``pipeline_name``,
+    ``child_index``, ``step``, ``phase``, ``duration_ms``,
+    ``error_class``, ``error_message`` attached to the record via
+    ``log.info(..., extra=...)`` are included when present. Exception
+    tracebacks land under ``exc_info``. Arbitrary extra keys flow
+    through as-is so callers can attach custom structured fields.
+
+    Examples:
+        >>> import logging
+        >>> handler = logging.StreamHandler()
+        >>> handler.setFormatter(JsonFormatter())
+        >>> log.addHandler(handler)
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Serialize ``record`` as a single-line JSON object.
+
+        Args:
+            record: The log record from the standard logging machinery.
+
+        Returns:
+            A JSON string (no trailing newline; the handler adds one).
+        """
+        payload: Dict[str, Any] = {
+            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        for key in _JSON_RECORD_KEYS:
+            value: Any = getattr(record, key, None)
+            if value is not None:
+                payload[key] = value
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str)
+
+
+def set_json_formatter(level: int = logging.INFO) -> None:
+    """Swap the default ``spark_az.pipeline_logger`` handler to :class:`JsonFormatter`.
+
+    Idempotent. Targets only the handler installed by this module
+    (identified by name) so other handlers attached by the user — caplog,
+    App Insights — are not touched.
+
+    Args:
+        level: Optional ``log.setLevel`` adjustment.
+
+    Examples:
+        At the top of an orchestrator notebook:
+
+        >>> set_json_formatter()
+        >>> log.info("hello", extra={"step": "boot"})
+    """
+    log.setLevel(level)
+    for h in log.handlers:
+        if h.get_name() == _HANDLER_NAME:
+            h.setFormatter(JsonFormatter())
+            return
+
+
+_APP_INSIGHTS_ENABLED: bool = False
+
+
+def enable_app_insights(connection_string: str) -> None:
+    """Wire the module logger to Azure App Insights / Log Analytics.
+
+    Requires the optional ``azure-monitor-opentelemetry`` dependency.
+    Idempotent: successive calls are no-ops in the same process.
+
+    Args:
+        connection_string: App Insights / Log Analytics connection
+            string (``"InstrumentationKey=...;..."``).
+
+    Raises:
+        ImportError: ``azure.monitor.opentelemetry`` is not installed.
+            The message names the package to install.
+
+    Examples:
+        >>> enable_app_insights("InstrumentationKey=...;IngestionEndpoint=...")
+    """
+    global _APP_INSIGHTS_ENABLED
+    if _APP_INSIGHTS_ENABLED:
+        return
+    try:
+        from azure.monitor.opentelemetry import configure_azure_monitor
+    except ImportError as exc:
+        raise ImportError(
+            "enable_app_insights requires the optional "
+            "`azure-monitor-opentelemetry` dependency. "
+            "Install with: pip install azure-monitor-opentelemetry"
+        ) from exc
+    configure_azure_monitor(
+        connection_string=connection_string,
+        logger_name="spark_az.pipeline_logger",
+    )
+    _APP_INSIGHTS_ENABLED = True
+
+
+class _StepContext:
+    """The object yielded by :func:`step` — exposes ``metric(key, value)``."""
+
+    def __init__(self) -> None:
+        self.metrics: Dict[str, Any] = {}
+
+    def metric(self, key: str, value: Any) -> None:
+        """Record a metric to attach to the step's success log record.
+
+        Args:
+            key: Field name in the emitted JSON.
+            value: Any JSON-serializable value (or anything ``str()``-able
+                — :class:`JsonFormatter` uses ``default=str``).
+
+        Examples:
+            >>> with step("extract") as s:
+            ...     s.metric("rows_in", 1234)
+        """
+        self.metrics[key] = value
+
+
+@contextmanager
+def step(name: str, **attrs: Any) -> Iterator[_StepContext]:
+    """Time a logical step and emit structured log records.
+
+    Logs three records to ``spark_az.pipeline_logger``:
+
+    - INFO on entry: ``{"step": name, "phase": "start", **attrs}``.
+    - INFO on success exit: ``{"step": name, "phase": "ok",
+      "duration_ms": ..., **attrs, **metrics}``.
+    - ERROR on exception: ``{"step": name, "phase": "failed",
+      "duration_ms": ..., "error_class": ..., "error_message": ...,
+      **attrs}``. The exception is then re-raised.
+
+    The active ``pipeline_run_id`` (set via :func:`set_active_run_id` or
+    automatically by :func:`run_pipeline`) is attached to every record.
+
+    Args:
+        name: Step name. Free-form.
+        **attrs: Extra structured fields attached to every record for
+            this step.
+
+    Yields:
+        A :class:`_StepContext` exposing ``metric(key, value)`` to
+        accumulate counts/values into the success log record.
+
+    Examples:
+        >>> with step("extract", source="lab.raw") as s:
+        ...     df = source.read()
+        ...     s.metric("rows_in", df.count())
+    """
+    ctx: _StepContext = _StepContext()
+    base: Dict[str, Any] = {"step": name, **attrs}
+    if _active_run_id is not None:
+        base["pipeline_run_id"] = _active_run_id
+
+    started: float = time.monotonic()
+    log.info("step start: %s", name, extra={**base, "phase": "start"})
+
+    try:
+        yield ctx
+    except BaseException as exc:
+        duration_ms: int = int((time.monotonic() - started) * 1000)
+        log.error(
+            "step failed: %s (%s)",
+            name,
+            type(exc).__name__,
+            extra={
+                **base,
+                "phase": "failed",
+                "duration_ms": duration_ms,
+                "error_class": type(exc).__name__,
+                "error_message": _truncate(str(exc), limit=4096),
+            },
+        )
+        raise
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    log.info(
+        "step ok: %s (%dms)",
+        name,
+        duration_ms,
+        extra={**base, "phase": "ok", "duration_ms": duration_ms, **ctx.metrics},
+    )
+
+
+class PipelineParams(TypedDict, total=False):
+    """Standard Synapse pipeline parameters consumed by the starter notebook.
+
+    Fields:
+        pipeline_run_id: Optional Synapse-injected run id (e.g. from
+            ``@pipeline().RunId``). When present,
+            :func:`run_pipeline` uses it instead of generating a UUID.
+        pipeline_name: Caller-supplied label stamped on every row.
+        log_table: Fully-qualified Delta log table name.
+        fail_fast: Whether to stop the orchestrator on first failure.
+        default_timeout_seconds: Per-child timeout default.
+        notebooks: List of :class:`ChildSpec`-shaped dicts.
+        extras: Free-form caller-defined bag, not interpreted by
+            :func:`run_pipeline` but available downstream.
+
+    Examples:
+        >>> params: PipelineParams = read_pipeline_params(
+        ...     pipeline_name="nightly",
+        ...     log_table="lab.__pipeline_runlog",
+        ...     notebooks=[{"path": "/x"}],
+        ... )
+    """
+
+    pipeline_run_id: str
+    pipeline_name: str
+    log_table: str
+    fail_fast: bool
+    default_timeout_seconds: int
+    notebooks: List[Dict[str, Any]]
+    extras: Dict[str, Any]
+
+
+def read_pipeline_params(
+    *,
+    pipeline_name: str,
+    log_table: str,
+    notebooks: List[Dict[str, Any]],
+    fail_fast: bool = True,
+    default_timeout_seconds: int = 1800,
+    pipeline_run_id: Optional[str] = None,
+    extras: Optional[Dict[str, Any]] = None,
+) -> PipelineParams:
+    """Build a validated :class:`PipelineParams` from raw Synapse-passed args.
+
+    Validates the minimum invariants the orchestrator expects so
+    misconfigured pipelines fail fast at the parameter cell, not deep
+    inside :func:`run_pipeline`.
+
+    Args:
+        pipeline_name: Required. Non-empty caller label.
+        log_table: Required. Non-empty fully-qualified Delta table name.
+        notebooks: Required. List of dicts; each must contain a
+            non-empty string ``"path"``.
+        fail_fast: Defaults to ``True``.
+        default_timeout_seconds: Defaults to 1800.
+        pipeline_run_id: Optional Synapse-injected run id.
+        extras: Optional free-form bag.
+
+    Returns:
+        A validated :class:`PipelineParams`.
+
+    Raises:
+        ValueError: ``pipeline_name`` empty; ``log_table`` empty;
+            ``notebooks`` not a list of dicts each containing a
+            non-empty string ``path``.
+
+    Examples:
+        >>> params = read_pipeline_params(
+        ...     pipeline_name="nightly",
+        ...     log_table="lab.__pipeline_runlog",
+        ...     notebooks=[
+        ...         {"path": "/notebooks/extract"},
+        ...         {"path": "/notebooks/load", "timeout_seconds": 3600},
+        ...     ],
+        ...     pipeline_run_id="r-123",
+        ... )
+    """
+    if not pipeline_name:
+        raise ValueError("pipeline_name must be non-empty")
+    if not log_table:
+        raise ValueError("log_table must be non-empty")
+    if not isinstance(notebooks, list):
+        raise ValueError("notebooks must be a list")
+    for i, child in enumerate(notebooks):
+        if not isinstance(child, dict):
+            raise ValueError(
+                f"notebooks[{i}] must be a dict, got {type(child).__name__}"
+            )
+        path: Any = child.get("path")
+        if not isinstance(path, str) or not path:
+            raise ValueError(
+                f"notebooks[{i}] missing required non-empty string field 'path'"
+            )
+
+    params: PipelineParams = {
+        "pipeline_name": pipeline_name,
+        "log_table": log_table,
+        "notebooks": list(notebooks),
+        "fail_fast": fail_fast,
+        "default_timeout_seconds": default_timeout_seconds,
+    }
+    if pipeline_run_id:
+        params["pipeline_run_id"] = pipeline_run_id
+    if extras:
+        params["extras"] = dict(extras)
+    return params
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",
+    "JsonFormatter",
     "LOG_SCHEMA_FIELDS",
+    "PipelineParams",
+    "enable_app_insights",
     "ensure_log_table",
+    "get_active_run_id",
     "log",
+    "read_pipeline_params",
+    "set_active_run_id",
+    "set_json_formatter",
+    "step",
     "run_child",
     "run_pipeline",
 ]

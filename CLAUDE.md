@@ -92,11 +92,11 @@ scripts/build_notebooks.sh
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Scaffolding | **COMPLETED 2026-05-21 — 87d8762** |
-| 1 | `spark_az` library + inline notebook (v1) | **COMPLETED 2026-05-21 — 87d8762** |
-| 2 | Parallel orchestration (`run_pipeline_parallel`) | NOT STARTED |
-| 3 | Step-grained logging inside children | NOT STARTED |
-| 4 | Python builder for Synapse pipeline JSON | NOT STARTED |
-| 5 | `pipeline_run_id` propagation from `@pipeline().RunId` | NOT STARTED |
+| 1 | `spark_az` library + inline notebook (v1) | **COMPLETED 2026-05-21 — e87778a** |
+| 2 | JSON logging, App Insights helper, `step()`, `PipelineParams`, starter notebook, pipeline JSON template, `pipeline_run_id` injection (v2) | **COMPLETED 2026-05-21 — pending PR merge** |
+| 3 | Step-grained logging persisted to its own Delta table | NOT STARTED |
+| 4 | Parallel orchestration (`run_pipeline_parallel`) | NOT STARTED |
+| 5 | Python builder for Synapse pipeline JSON | NOT STARTED |
 
 ## Docs
 
