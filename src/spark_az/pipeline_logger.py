@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+import traceback
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
@@ -384,10 +386,130 @@ def _now_clock() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
+_TIMEOUT_HINTS: List[str] = ["timeout", "timed out"]
+
+
+def _orchestrator_notebook_name() -> str:
+    """Best-effort lookup of the calling notebook's name from runtime context.
+
+    Returns an empty string if unavailable. Errors are swallowed because
+    the field is decorative — losing it must not fail a run.
+    """
+    try:
+        nb: Any = _nbutils()
+        context: Any = getattr(getattr(nb, "runtime", None), "context", None)
+        if context is None:
+            return ""
+        name: Any = context["currentNotebookName"]
+        return str(name) if name else ""
+    except Exception:
+        return ""
+
+
+def run_child(
+    spec: ChildSpec,
+    *,
+    pipeline_run_id: str,
+    pipeline_name: str,
+    child_index: int,
+    default_timeout_seconds: int = 1800,
+) -> ChildResult:
+    """Run one child notebook and return a :class:`ChildResult`.
+
+    Never raises. Any exception from ``mssparkutils.notebook.run`` is
+    captured into the result. The decision to re-raise lives in
+    :func:`run_pipeline` so this function stays composable for future
+    parallel orchestration.
+
+    Status mapping:
+
+    - Returns normally → ``"ok"``; ``exit_value`` is ``str(returned)``.
+    - Raises with ``"timeout"`` or ``"timed out"`` in the exception message
+      → ``"timeout"``.
+    - Any other exception → ``"failed"``.
+
+    Args:
+        spec: The child to run.
+        pipeline_run_id: UUID shared across one ``run_pipeline()`` call.
+        pipeline_name: Caller-supplied label.
+        child_index: Zero-based position in the input list.
+        default_timeout_seconds: Used when ``spec["timeout_seconds"]`` is
+            absent.
+
+    Returns:
+        A :class:`ChildResult` describing the outcome.
+
+    Examples:
+        >>> result = run_child(
+        ...     {"path": "/notebooks/extract", "args": {"date": "2026-05-21"}},
+        ...     pipeline_run_id="r",
+        ...     pipeline_name="p",
+        ...     child_index=0,
+        ... )
+    """
+    nb: Any = _nbutils()
+    timeout: int = int(spec.get("timeout_seconds", default_timeout_seconds))
+    args: Dict[str, Any] = dict(spec.get("args", {}))
+    args_json: str = _serialize_args(args)
+    orchestrator: str = _orchestrator_notebook_name()
+
+    started_iso: str = _now_iso()
+    started_mono: float = time.monotonic()
+    try:
+        returned: Any = nb.notebook.run(spec["path"], timeout, args)
+    except BaseException as exc:
+        finished_iso: str = _now_iso()
+        duration_ms: int = int((time.monotonic() - started_mono) * 1000)
+        message: str = str(exc)
+        status: str = (
+            "timeout"
+            if any(h in message.lower() for h in _TIMEOUT_HINTS)
+            else "failed"
+        )
+        return {
+            "pipeline_run_id": pipeline_run_id,
+            "pipeline_name": pipeline_name,
+            "child_index": child_index,
+            "notebook_path": spec["path"],
+            "status": status,
+            "started_at": started_iso,
+            "finished_at": finished_iso,
+            "duration_ms": duration_ms,
+            "exit_value": "",
+            "args_json": args_json,
+            "error_class": type(exc).__name__,
+            "error_message": _truncate(message, limit=4096),
+            "error_traceback": _truncate(
+                traceback.format_exc(), limit=16384
+            ),
+            "orchestrator_notebook": orchestrator,
+        }
+
+    finished_iso = _now_iso()
+    duration_ms = int((time.monotonic() - started_mono) * 1000)
+    return {
+        "pipeline_run_id": pipeline_run_id,
+        "pipeline_name": pipeline_name,
+        "child_index": child_index,
+        "notebook_path": spec["path"],
+        "status": "ok",
+        "started_at": started_iso,
+        "finished_at": finished_iso,
+        "duration_ms": duration_ms,
+        "exit_value": str(returned) if returned is not None else "",
+        "args_json": args_json,
+        "error_class": "",
+        "error_message": "",
+        "error_traceback": "",
+        "orchestrator_notebook": orchestrator,
+    }
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",
     "LOG_SCHEMA_FIELDS",
     "ensure_log_table",
     "log",
+    "run_child",
 ]

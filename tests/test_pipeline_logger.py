@@ -224,3 +224,56 @@ def test_print_line_timeout_status(caplog: pytest.LogCaptureFixture) -> None:
     assert any("[TIME]" in m for m in messages)
     assert any("1800.00s" in m for m in messages)
     assert any("timed out" in m for m in messages)
+
+
+def test_run_child_success(fake_mssparkutils: Any) -> None:
+    from spark_az.pipeline_logger import ChildSpec, run_child
+
+    fake_mssparkutils.notebook.handler = lambda path, t, args: "42rows"
+    spec: ChildSpec = {
+        "path": "/notebooks/extract",
+        "args": {"date": "2026-05-21"},
+        "timeout_seconds": 600,
+    }
+
+    result = run_child(
+        spec,
+        pipeline_run_id="run-1",
+        pipeline_name="nightly",
+        child_index=0,
+    )
+
+    assert result["status"] == "ok"
+    assert result["exit_value"] == "42rows"
+    assert result["notebook_path"] == "/notebooks/extract"
+    assert result["pipeline_run_id"] == "run-1"
+    assert result["pipeline_name"] == "nightly"
+    assert result["child_index"] == 0
+    assert result["duration_ms"] >= 0
+    assert result["error_class"] == ""
+    assert result["error_message"] == ""
+    assert result["error_traceback"] == ""
+    assert result["args_json"] == '{"date": "2026-05-21"}'
+    call = fake_mssparkutils.notebook.calls[0]
+    assert call == {
+        "path": "/notebooks/extract",
+        "timeout": 600,
+        "args": {"date": "2026-05-21"},
+    }
+
+
+def test_run_child_uses_default_timeout(fake_mssparkutils: Any) -> None:
+    from spark_az.pipeline_logger import ChildSpec, run_child
+
+    fake_mssparkutils.notebook.handler = lambda path, t, args: ""
+    spec: ChildSpec = {"path": "/notebooks/x"}
+
+    run_child(
+        spec,
+        pipeline_run_id="r",
+        pipeline_name="p",
+        child_index=0,
+        default_timeout_seconds=900,
+    )
+
+    assert fake_mssparkutils.notebook.calls[0]["timeout"] == 900
