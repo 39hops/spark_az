@@ -1,4 +1,4 @@
-"""Unit tests for spark_az.pipeline_logger."""
+"""Unit tests for spark_az.lgr."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Set, get_type_hints
@@ -11,7 +11,7 @@ import pytest
 
 def test_log_schema_fields_are_complete() -> None:
     """LOG_SCHEMA_FIELDS must list every column in the spec."""
-    import spark_az.pipeline_logger as pl
+    import spark_az.lgr as pl
 
     expected_names: List[str] = [
         "pipeline_run_id",
@@ -36,7 +36,7 @@ def test_log_schema_fields_are_complete() -> None:
 
 def test_log_schema_fields_use_known_types() -> None:
     """Every column type must be one of the documented spark type names."""
-    import spark_az.pipeline_logger as pl
+    import spark_az.lgr as pl
 
     allowed: Set[str] = {"string", "long", "timestamp"}
     types_used: Set[str] = {t for _, t in pl.LOG_SCHEMA_FIELDS}
@@ -45,7 +45,7 @@ def test_log_schema_fields_use_known_types() -> None:
 
 def test_childresult_keys_match_audit_columns_minus_audited_at() -> None:
     """ChildResult covers every log column except audited_at."""
-    import spark_az.pipeline_logger as pl
+    import spark_az.lgr as pl
 
     schema_names: List[str] = [name for name, _ in pl.LOG_SCHEMA_FIELDS]
     childresult_keys: List[str] = list(
@@ -56,20 +56,20 @@ def test_childresult_keys_match_audit_columns_minus_audited_at() -> None:
 
 def test_childspec_total_false() -> None:
     """ChildSpec is a partial TypedDict (total=False)."""
-    import spark_az.pipeline_logger as pl
+    import spark_az.lgr as pl
 
     spec: pl.ChildSpec = {"path": "/x"}
     assert spec["path"] == "/x"
 
 
 def test_truncate_under_limit_returns_input() -> None:
-    from spark_az.pipeline_logger import _truncate
+    from spark_az.lgr import _truncate
 
     assert _truncate("hello", limit=100) == "hello"
 
 
 def test_truncate_over_limit_appends_marker() -> None:
-    from spark_az.pipeline_logger import _truncate
+    from spark_az.lgr import _truncate
 
     out: str = _truncate("x" * 50, limit=20)
     assert out.startswith("x" * 20)
@@ -78,7 +78,7 @@ def test_truncate_over_limit_appends_marker() -> None:
 
 
 def test_truncate_empty_string_passes_through() -> None:
-    from spark_az.pipeline_logger import _truncate
+    from spark_az.lgr import _truncate
 
     assert _truncate("", limit=10) == ""
 
@@ -86,7 +86,7 @@ def test_truncate_empty_string_passes_through() -> None:
 def test_nbutils_returns_module_when_notebookutils_present(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import _nbutils
+    from spark_az.lgr import _nbutils
 
     nb: Any = _nbutils()
     assert nb is fake_mssparkutils
@@ -97,14 +97,14 @@ def test_nbutils_raises_when_neither_module_present(
 ) -> None:
     monkeypatch.setitem(sys.modules, "notebookutils", None)
     monkeypatch.setitem(sys.modules, "mssparkutils", None)
-    from spark_az.pipeline_logger import _nbutils
+    from spark_az.lgr import _nbutils
 
     with pytest.raises(RuntimeError, match="mssparkutils"):
         _nbutils()
 
 
 def test_skipped_result_has_expected_fields() -> None:
-    from spark_az.pipeline_logger import ChildSpec, _skipped_result
+    from spark_az.lgr import ChildSpec, _skipped_result
 
     spec: ChildSpec = {"path": "/notebooks/load", "args": {"k": "v"}}
     result = _skipped_result(
@@ -133,7 +133,7 @@ def test_skipped_result_has_expected_fields() -> None:
 
 import logging
 
-from spark_az.pipeline_logger import ChildResult as _ChildResult
+from spark_az.lgr import ChildResult as _ChildResult
 
 
 def _result_template() -> "_ChildResult":
@@ -156,15 +156,15 @@ def _result_template() -> "_ChildResult":
 
 
 def test_module_logger_is_configured() -> None:
-    from spark_az.pipeline_logger import log
+    from spark_az.lgr import log
 
-    assert log.name == "spark_az.pipeline_logger"
+    assert log.name == "spark_az.lgr"
     assert log.propagate is False
     assert any(isinstance(h, logging.StreamHandler) for h in log.handlers)
 
 
 def test_print_line_ok_status(caplog: pytest.LogCaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line, log
+    from spark_az.lgr import _print_line, log
 
     result: Dict[str, Any] = _result_template()
     with caplog.at_level(logging.INFO, logger=log.name):
@@ -178,7 +178,7 @@ def test_print_line_ok_status(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_print_line_failed_status(caplog: pytest.LogCaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line, log
+    from spark_az.lgr import _print_line, log
 
     result: Dict[str, Any] = _result_template()
     result["status"] = "failed"
@@ -197,7 +197,7 @@ def test_print_line_failed_status(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_print_line_skipped_status(caplog: pytest.LogCaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line, log
+    from spark_az.lgr import _print_line, log
 
     result: Dict[str, Any] = _result_template()
     result["status"] = "skipped"
@@ -213,7 +213,7 @@ def test_print_line_skipped_status(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_print_line_timeout_status(caplog: pytest.LogCaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line, log
+    from spark_az.lgr import _print_line, log
 
     result: Dict[str, Any] = _result_template()
     result["status"] = "timeout"
@@ -230,7 +230,7 @@ def test_print_line_timeout_status(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_run_child_success(fake_mssparkutils: Any) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     fake_mssparkutils.notebook.handler = lambda path, t, args: "42rows"
     spec: ChildSpec = {
@@ -266,7 +266,7 @@ def test_run_child_success(fake_mssparkutils: Any) -> None:
 
 
 def test_run_child_uses_default_timeout(fake_mssparkutils: Any) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     fake_mssparkutils.notebook.handler = lambda path, t, args: ""
     spec: ChildSpec = {"path": "/notebooks/x"}
@@ -284,7 +284,7 @@ def test_run_child_uses_default_timeout(fake_mssparkutils: Any) -> None:
 
 def test_run_child_failure_captures_traceback(fake_mssparkutils: Any) -> None:
     """run_child must record status=failed and capture error details on exception."""
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     def boom(path: str, timeout: int, args: Dict[str, Any]) -> Any:
         raise ValueError("missing column 'id'")
@@ -310,7 +310,7 @@ def test_run_child_timeout_routes_to_timeout_status(
     fake_mssparkutils: Any,
 ) -> None:
     """run_child must set status=timeout when the notebook raises a timeout RuntimeError."""
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     def slow(path: str, timeout: int, args: Dict[str, Any]) -> Any:
         raise RuntimeError("notebook timed out after 1800 seconds")
@@ -334,7 +334,7 @@ def test_run_child_truncates_giant_traceback(
     fake_mssparkutils: Any,
 ) -> None:
     """run_child must truncate oversized error_message and error_traceback fields."""
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     def boom(path: str, timeout: int, args: Dict[str, Any]) -> Any:
         raise RuntimeError("x" * 50000)
@@ -357,7 +357,7 @@ def test_run_child_truncates_giant_traceback(
 def test_run_pipeline_all_pass_returns_results(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     responses: Dict[str, str] = {
         "/notebooks/extract": "10rows",
@@ -392,7 +392,7 @@ def test_run_pipeline_outside_synapse_raises_before_loop(
 ) -> None:
     monkeypatch.setitem(sys.modules, "notebookutils", None)
     monkeypatch.setitem(sys.modules, "mssparkutils", None)
-    from spark_az.pipeline_logger import run_pipeline
+    from spark_az.lgr import run_pipeline
 
     with pytest.raises(RuntimeError, match="mssparkutils"):
         run_pipeline(
@@ -406,7 +406,7 @@ def test_run_pipeline_outside_synapse_raises_before_loop(
 def test_run_pipeline_fail_fast_skips_remaining_and_raises(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
         if path == "/notebooks/transform":
@@ -439,7 +439,7 @@ def test_run_pipeline_fail_fast_writes_log_before_raising(
     fake_mssparkutils: Any, registered_spark: Any
 ) -> None:
     """The Delta log must be durable even on fail_fast re-raise."""
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     spark: Any = registered_spark
     table: str = "default.test_runpipeline_failfast"
@@ -474,7 +474,7 @@ def test_run_pipeline_fail_fast_writes_log_before_raising(
 def test_run_pipeline_fail_fast_false_runs_everything(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
         if path == "/notebooks/middle":
@@ -534,7 +534,7 @@ def test_public_api_reexported_from_package_root() -> None:
 
 
 def test_json_formatter_basic_fields() -> None:
-    from spark_az.pipeline_logger import JsonFormatter
+    from spark_az.lgr import JsonFormatter
 
     fmt: JsonFormatter = JsonFormatter()
     record = logging.LogRecord(
@@ -549,7 +549,7 @@ def test_json_formatter_basic_fields() -> None:
 
 
 def test_json_formatter_includes_extras() -> None:
-    from spark_az.pipeline_logger import JsonFormatter
+    from spark_az.lgr import JsonFormatter
 
     fmt: JsonFormatter = JsonFormatter()
     record = logging.LogRecord(
@@ -566,7 +566,7 @@ def test_json_formatter_includes_extras() -> None:
 
 
 def test_set_json_formatter_swaps_default_handler() -> None:
-    from spark_az.pipeline_logger import (
+    from spark_az.lgr import (
         JsonFormatter,
         _HANDLER_NAME,
         log,
@@ -580,7 +580,7 @@ def test_set_json_formatter_swaps_default_handler() -> None:
 
 
 def test_set_json_formatter_idempotent() -> None:
-    from spark_az.pipeline_logger import _HANDLER_NAME, log, set_json_formatter
+    from spark_az.lgr import _HANDLER_NAME, log, set_json_formatter
 
     set_json_formatter()
     set_json_formatter()
@@ -601,7 +601,7 @@ def test_enable_app_insights_missing_dep_raises(
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(_builtins, "__import__", fake_import)
-    from spark_az import pipeline_logger as pl
+    from spark_az import lgr as pl
 
     monkeypatch.setattr(pl, "_APP_INSIGHTS_ENABLED", False, raising=False)
     with pytest.raises(ImportError, match="azure-monitor-opentelemetry"):
@@ -609,7 +609,7 @@ def test_enable_app_insights_missing_dep_raises(
 
 
 def test_step_emits_start_and_ok(caplog: pytest.LogCaptureFixture) -> None:
-    from spark_az.pipeline_logger import log, step
+    from spark_az.lgr import log, step
 
     with caplog.at_level(logging.INFO, logger=log.name):
         with step("extract", source="lab.raw") as s:
@@ -627,7 +627,7 @@ def test_step_emits_start_and_ok(caplog: pytest.LogCaptureFixture) -> None:
 def test_step_emits_failed_and_reraises(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    from spark_az.pipeline_logger import log, step
+    from spark_az.lgr import log, step
 
     with caplog.at_level(logging.INFO, logger=log.name):
         with pytest.raises(ValueError, match="bad"):
@@ -643,7 +643,7 @@ def test_step_emits_failed_and_reraises(
 
 
 def test_step_uses_active_run_id(caplog: pytest.LogCaptureFixture) -> None:
-    from spark_az.pipeline_logger import log, set_active_run_id, step
+    from spark_az.lgr import log, set_active_run_id, step
 
     set_active_run_id("r-test")
     with caplog.at_level(logging.INFO, logger=log.name):
@@ -656,7 +656,7 @@ def test_step_uses_active_run_id(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_read_pipeline_params_happy_path() -> None:
-    from spark_az.pipeline_logger import read_pipeline_params
+    from spark_az.lgr import read_pipeline_params
 
     params = read_pipeline_params(
         pipeline_name="nightly",
@@ -674,14 +674,14 @@ def test_read_pipeline_params_happy_path() -> None:
 
 
 def test_read_pipeline_params_raises_on_empty_pipeline_name() -> None:
-    from spark_az.pipeline_logger import read_pipeline_params
+    from spark_az.lgr import read_pipeline_params
 
     with pytest.raises(ValueError, match="pipeline_name"):
         read_pipeline_params(pipeline_name="", log_table="t", notebooks=[])
 
 
 def test_read_pipeline_params_raises_on_bad_notebooks() -> None:
-    from spark_az.pipeline_logger import read_pipeline_params
+    from spark_az.lgr import read_pipeline_params
 
     with pytest.raises(ValueError, match="path"):
         read_pipeline_params(
@@ -694,7 +694,7 @@ def test_read_pipeline_params_raises_on_bad_notebooks() -> None:
 def test_run_pipeline_accepts_injected_run_id(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     fake_mssparkutils.notebook.handler = lambda p, t, a: "ok"
     results = run_pipeline(
@@ -710,7 +710,7 @@ def test_run_pipeline_accepts_injected_run_id(
 def test_run_pipeline_sets_and_clears_active_run_id(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import (
+    from spark_az.lgr import (
         ChildSpec,
         get_active_run_id,
         run_pipeline,

@@ -13,7 +13,7 @@
 # ---
 
 # %% [markdown]
-# # pipeline_logger
+# # lgr
 #
 # Orchestrates child Synapse notebooks via mssparkutils.notebook.run and
 # writes a Delta log row per child. Invoke from a Synapse pipeline

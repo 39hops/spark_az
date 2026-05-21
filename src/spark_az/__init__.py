@@ -1,7 +1,7 @@
 """Azure Synapse Spark notebook orchestration + Delta logging."""
 from __future__ import annotations
 
-from .pipeline_logger import (
+from .lgr import (
     ChildResult,
     ChildSpec,
     JsonFormatter,

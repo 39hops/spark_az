@@ -25,7 +25,7 @@ Public API
 Conventions
 -----------
 - The log table is a managed Delta table (e.g. ``"lab.__pipeline_runlog"``).
-- Per-child output goes through ``logging.Logger`` ``spark_az.pipeline_logger``
+- Per-child output goes through ``logging.Logger`` ``spark_az.lgr``
   at ``INFO``; attach an ``AzureLogHandler`` (or call
   :func:`enable_app_insights`) to fan out without touching this module.
 - ``mssparkutils.notebook.run`` is blocking; orchestration is sequential.
@@ -58,9 +58,9 @@ if TYPE_CHECKING:
     from pyspark.sql.types import StructType
 
 
-_HANDLER_NAME: str = "spark_az.pipeline_logger.default"
+_HANDLER_NAME: str = "spark_az.lgr.default"
 
-log: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
+log: logging.Logger = logging.getLogger("spark_az.lgr")
 if not any(h.get_name() == _HANDLER_NAME for h in log.handlers):
     _handler: logging.Handler = logging.StreamHandler()
     _handler.set_name(_HANDLER_NAME)
@@ -234,7 +234,7 @@ def _nbutils() -> Any:
         except ImportError:
             raise RuntimeError(
                 "mssparkutils / notebookutils not importable; "
-                "spark_az.pipeline_logger must run inside Azure Synapse."
+                "spark_az.lgr must run inside Azure Synapse."
             )
 
 
@@ -356,7 +356,7 @@ _STDOUT_ERROR_MAX: int = 80
 def _print_line(result: ChildResult, *, display_name: str) -> None:
     """Emit one human-readable log line for a finished child.
 
-    Logged at ``INFO`` to ``spark_az.pipeline_logger`` so users can attach
+    Logged at ``INFO`` to ``spark_az.lgr`` so users can attach
     additional handlers (e.g. ``AzureLogHandler``) without changes here.
 
     Format::
@@ -802,7 +802,7 @@ class JsonFormatter(logging.Formatter):
 
 
 def set_json_formatter(level: int = logging.INFO) -> None:
-    """Swap the default ``spark_az.pipeline_logger`` handler to :class:`JsonFormatter`.
+    """Swap the default ``spark_az.lgr`` handler to :class:`JsonFormatter`.
 
     Idempotent. Targets only the handler installed by this module
     (identified by name) so other handlers attached by the user — caplog,
@@ -857,7 +857,7 @@ def enable_app_insights(connection_string: str) -> None:
         ) from exc
     configure_azure_monitor(
         connection_string=connection_string,
-        logger_name="spark_az.pipeline_logger",
+        logger_name="spark_az.lgr",
     )
     _APP_INSIGHTS_ENABLED = True
 
@@ -887,7 +887,7 @@ class _StepContext:
 def step(name: str, **attrs: Any) -> Iterator[_StepContext]:
     """Time a logical step and emit structured log records.
 
-    Logs three records to ``spark_az.pipeline_logger``:
+    Logs three records to ``spark_az.lgr``:
 
     - INFO on entry: ``{"step": name, "phase": "start", **attrs}``.
     - INFO on success exit: ``{"step": name, "phase": "ok",

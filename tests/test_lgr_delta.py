@@ -10,7 +10,7 @@ pytestmark = pytest.mark.usefixtures("registered_spark")
 
 
 def test_ensure_log_table_creates_table(spark: Any) -> None:
-    from spark_az.pipeline_logger import LOG_SCHEMA_FIELDS, ensure_log_table
+    from spark_az.lgr import LOG_SCHEMA_FIELDS, ensure_log_table
 
     table: str = "default.test_ensure_creates"
     spark.sql(f"DROP TABLE IF EXISTS {table}")
@@ -24,7 +24,7 @@ def test_ensure_log_table_creates_table(spark: Any) -> None:
 
 
 def test_ensure_log_table_is_idempotent(spark: Any) -> None:
-    from spark_az.pipeline_logger import ensure_log_table
+    from spark_az.lgr import ensure_log_table
 
     table: str = "default.test_ensure_idempotent"
     spark.sql(f"DROP TABLE IF EXISTS {table}")
@@ -37,7 +37,7 @@ def test_ensure_log_table_is_idempotent(spark: Any) -> None:
 
 
 def test_append_rows_writes_all_columns_and_audited_at(spark: Any) -> None:
-    from spark_az.pipeline_logger import (
+    from spark_az.lgr import (
         LOG_SCHEMA_FIELDS,
         ChildResult,
         _append_rows,
@@ -77,7 +77,7 @@ def test_append_rows_writes_all_columns_and_audited_at(spark: Any) -> None:
 
 
 def test_append_rows_empty_is_noop(spark: Any) -> None:
-    from spark_az.pipeline_logger import _append_rows, ensure_log_table
+    from spark_az.lgr import _append_rows, ensure_log_table
 
     table: str = "default.test_append_empty"
     spark.sql(f"DROP TABLE IF EXISTS {table}")

@@ -9,12 +9,12 @@
 
 | Decision | Choice |
 | --- | --- |
-| Deliverable | **One polished `notebooks/pipeline_starter.ipynb`** (+ jupytext `.py`) that's the drop-in starting point for any new Synapse pipeline. |
+| Deliverable | **One polished `notebooks/_logging/lgr_starter.ipynb`** (+ jupytext `.py`) that's the drop-in starting point for any new Synapse pipeline. |
 | JSON logging | **Both paths.** Default formatter on the module logger is JSON-on-stdout; an opt-in `enable_app_insights(connection_string)` helper attaches an Azure Monitor OpenTelemetry handler when called. |
 | In-notebook step grain | **`step(name, **attrs)` context manager** emits structured log records keyed by the active `pipeline_run_id`. Logs only in v2 — Delta table for steps is deferred to v3. |
 | Pipeline params | **`PipelineParams` typed helper** that reads Synapse-passed args from the parameter cell, validates required keys, applies defaults, and exposes a typed object. |
-| Synapse pipeline JSON | **Reference template at `synapse/pipeline_template.json`** — importable into Synapse Studio with the parameter wiring done. |
-| Library scope | **Additions land in `src/spark_az/pipeline_logger.py`** (same single module per v1 design). Refactor to submodules only if the file exceeds ~700 lines after this work. |
+| Synapse pipeline JSON | **Reference template at `synapse/lgr_starter_pipeline.json`** — importable into Synapse Studio with the parameter wiring done. |
+| Library scope | **Additions land in `src/spark_az/lgr.py`** (same single module per v1 design). Refactor to submodules only if the file exceeds ~700 lines after this work. |
 | Dependencies | `python-json-logger` and `azure-monitor-opentelemetry` join the `dev`/`spark`/`test` extras pattern — both **optional** so the base package stays zero-dep. |
 | Notebook style | Same hand-maintained jupytext format as v1 inline notebook. Section-by-section MD documentation. |
 
@@ -49,11 +49,11 @@ class JsonFormatter(logging.Formatter):
 
 ### `set_json_formatter(level: int = logging.INFO) -> None`
 
-Idempotent. Swaps the default `spark_az.pipeline_logger` handler's formatter to `JsonFormatter`. Called at the top of `pipeline_starter.ipynb`.
+Idempotent. Swaps the default `spark_az.lgr` handler's formatter to `JsonFormatter`. Called at the top of `lgr_starter.ipynb`.
 
 ### `enable_app_insights(connection_string: str, level: int = logging.INFO) -> None`
 
-If `azure-monitor-opentelemetry` is importable, attaches a `LoggingHandler` from `azure.monitor.opentelemetry` to the `spark_az.pipeline_logger` logger. Raises a clear `ImportError` with install instructions when the dep is missing. Idempotent (won't double-attach).
+If `azure-monitor-opentelemetry` is importable, attaches a `LoggingHandler` from `azure.monitor.opentelemetry` to the `spark_az.lgr` logger. Raises a clear `ImportError` with install instructions when the dep is missing. Idempotent (won't double-attach).
 
 ### `step(name: str, *, log: logging.Logger = ..., **attrs: Any)` context manager
 
@@ -109,7 +109,7 @@ def read_pipeline_params(
 
 ## New artifacts
 
-### `notebooks/pipeline_starter.py` (jupytext)
+### `notebooks/_logging/lgr_starter.py` (jupytext)
 
 Single self-contained starter notebook. Cell layout:
 
@@ -127,11 +127,11 @@ Single self-contained starter notebook. Cell layout:
 12. Code — `if params["notebooks"]: results = run_pipeline(...)`.
 13. Markdown — "## Inspect" — sample SQL.
 
-Same hand-maintained pattern as `pipeline_logger_inline.py` — uses the installed library, NOT inline. The starter is for users who already have spark_az installed on their pool. (Users who don't can still use `pipeline_logger_inline.ipynb`.)
+Same hand-maintained pattern as `lgr_inline.py` — uses the installed library, NOT inline. The starter is for users who already have spark_az installed on their pool. (Users who don't can still use `lgr_inline.ipynb`.)
 
-### `synapse/pipeline_template.json`
+### `synapse/lgr_starter_pipeline.json`
 
-A Synapse pipeline JSON containing one Notebook activity that calls `pipeline_starter` with all the parameters wired. User imports it into Synapse Studio, replaces the `referenceName` with their notebook's name, and ships.
+A Synapse pipeline JSON containing one Notebook activity that calls `lgr_starter` with all the parameters wired. User imports it into Synapse Studio, replaces the `referenceName` with their notebook's name, and ships.
 
 Structure:
 
@@ -144,7 +144,7 @@ Structure:
         "name": "run_starter",
         "type": "SynapseNotebook",
         "typeProperties": {
-          "notebook": {"referenceName": "pipeline_starter", "type": "NotebookReference"},
+          "notebook": {"referenceName": "lgr_starter", "type": "NotebookReference"},
           "parameters": {
             "pipeline_run_id":          {"value": "@pipeline().RunId", "type": "string"},
             "pipeline_name":            {"value": "@pipeline().Pipeline", "type": "string"},
@@ -167,8 +167,8 @@ Doc note in `README.md` and the starter notebook explains how to import + custom
 
 | Layer | What |
 | --- | --- |
-| `tests/test_pipeline_logger.py` | `JsonFormatter` produces parseable JSON with expected fields; `set_json_formatter` is idempotent; `step()` emits start/ok/failed records with timing; `step.metric()` accumulates; `read_pipeline_params` raises on invalid inputs; `enable_app_insights` raises informatively when the dep is missing (no need to install the heavy Azure dep to test the missing-import path). |
-| `tests/test_pipeline_logger_delta.py` | Unchanged. |
+| `tests/test_lgr.py` | `JsonFormatter` produces parseable JSON with expected fields; `set_json_formatter` is idempotent; `step()` emits start/ok/failed records with timing; `step.metric()` accumulates; `read_pipeline_params` raises on invalid inputs; `enable_app_insights` raises informatively when the dep is missing (no need to install the heavy Azure dep to test the missing-import path). |
+| `tests/test_lgr_delta.py` | Unchanged. |
 | `tests/test_session.py` | Unchanged. |
 
 Target: net +12–18 tests, full suite still green in under 20 s.
@@ -178,8 +178,8 @@ Target: net +12–18 tests, full suite still green in under 20 s.
 **In v2:**
 
 - `JsonFormatter`, `set_json_formatter`, `enable_app_insights`, `step`, `read_pipeline_params`.
-- `notebooks/pipeline_starter.{py,ipynb}`.
-- `synapse/pipeline_template.json`.
+- `notebooks/lgr_starter.{py,ipynb}`.
+- `synapse/lgr_starter_pipeline.json`.
 - README + CAPABILITIES updates.
 
 **Explicitly out of v2 (deferred):**

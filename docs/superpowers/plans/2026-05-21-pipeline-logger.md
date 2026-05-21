@@ -4,7 +4,7 @@
 
 **Goal:** Ship a Python package + Synapse notebook that runs a sequence of child notebooks via `mssparkutils.notebook.run`, writes one Delta log row per child, and re-raises on failure so the upstream Synapse pipeline sees the failure.
 
-**Architecture:** Single module `src/spark_az/pipeline_logger.py` exposing `run_pipeline`, `run_child`, `ensure_log_table`, `ChildSpec`, `ChildResult`. Orchestrator is a jupytext "percent" `.py` in `notebooks/` that imports the library and is auto-converted to `.ipynb` for Synapse. Sequential by design; parallel is a v2.
+**Architecture:** Single module `src/spark_az/lgr.py` exposing `run_pipeline`, `run_child`, `ensure_log_table`, `ChildSpec`, `ChildResult`. Orchestrator is a jupytext "percent" `.py` in `notebooks/` that imports the library and is auto-converted to `.ipynb` for Synapse. Sequential by design; parallel is a v2.
 
 **Tech Stack:** Python 3.9+, `typing` module (NOT PEP 585 builtin generics), `from __future__ import annotations` at top of every file, PySpark + `delta-spark` for the log sink, `pytest` for tests, `jupytext` for the notebook build step, `mssparkutils`/`notebookutils` at runtime only (in Synapse).
 
@@ -29,14 +29,14 @@
 | `scripts/test.sh` | 1 | Run pytest. |
 | `src/spark_az/__init__.py` | 16 (re-exports), 1 (empty) | Public surface. |
 | `src/spark_az/session.py` | 2 | `get_spark` / `set_spark`. |
-| `src/spark_az/pipeline_logger.py` | 3, 5–15 | Schema, helpers, `run_child`, `run_pipeline`. |
+| `src/spark_az/lgr.py` | 3, 5–15 | Schema, helpers, `run_child`, `run_pipeline`. |
 | `src/spark_az/py.typed` | 1 | PEP 561 marker. |
 | `tests/conftest.py` | 4 | `fake_mssparkutils` fixture + local `SparkSession`. |
 | `tests/test_session.py` | 2 | Unit tests for session helpers. |
-| `tests/test_pipeline_logger.py` | 3, 5, 8–11, 13–15 | Pure-Python unit tests. |
-| `tests/test_pipeline_logger_delta.py` | 7, 12 | Local-Spark integration. |
-| `notebooks/pipeline_logger.py` | 17 | Jupytext orchestrator. |
-| `notebooks/pipeline_logger.ipynb` | 18 | Generated, committed. |
+| `tests/test_lgr.py` | 3, 5, 8–11, 13–15 | Pure-Python unit tests. |
+| `tests/test_lgr_delta.py` | 7, 12 | Local-Spark integration. |
+| `notebooks/_logging/lgr.py` | 17 | Jupytext orchestrator. |
+| `notebooks/_logging/lgr.ipynb` | 18 | Generated, committed. |
 | `scripts/build_notebooks.sh` | 18 | `jupytext --to ipynb`. |
 
 ---
@@ -325,15 +325,15 @@ git commit -m "feat(session): SparkSession lookup ported from spark_lib"
 ## Task 3: Schema constants + TypedDicts
 
 **Files:**
-- Create: `src/spark_az/pipeline_logger.py` (initial slice)
-- Create: `tests/test_pipeline_logger.py` (initial slice)
+- Create: `src/spark_az/lgr.py` (initial slice)
+- Create: `tests/test_lgr.py` (initial slice)
 
 - [ ] **Step 1: Write the failing test**
 
-`tests/test_pipeline_logger.py`:
+`tests/test_lgr.py`:
 
 ```python
-"""Unit tests for spark_az.pipeline_logger."""
+"""Unit tests for spark_az.lgr."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Set, get_type_hints
@@ -343,7 +343,7 @@ import pytest
 
 def test_log_schema_fields_are_complete() -> None:
     """LOG_SCHEMA_FIELDS must list every column in the spec."""
-    from spark_az import pipeline_logger as pl
+    from spark_az import lgr as pl
 
     expected_names: List[str] = [
         "pipeline_run_id",
@@ -368,7 +368,7 @@ def test_log_schema_fields_are_complete() -> None:
 
 def test_log_schema_fields_use_known_types() -> None:
     """Every column type must be one of the documented spark type names."""
-    from spark_az import pipeline_logger as pl
+    from spark_az import lgr as pl
 
     allowed: Set[str] = {"string", "long", "timestamp"}
     types_used: Set[str] = {t for _, t in pl.LOG_SCHEMA_FIELDS}
@@ -377,7 +377,7 @@ def test_log_schema_fields_use_known_types() -> None:
 
 def test_childresult_keys_match_audit_columns_minus_audited_at() -> None:
     """ChildResult covers every log column except audited_at."""
-    from spark_az import pipeline_logger as pl
+    from spark_az import lgr as pl
 
     schema_names: List[str] = [name for name, _ in pl.LOG_SCHEMA_FIELDS]
     childresult_keys: List[str] = list(
@@ -388,7 +388,7 @@ def test_childresult_keys_match_audit_columns_minus_audited_at() -> None:
 
 def test_childspec_total_false() -> None:
     """ChildSpec is a partial TypedDict (total=False)."""
-    from spark_az import pipeline_logger as pl
+    from spark_az import lgr as pl
 
     spec: pl.ChildSpec = {"path": "/x"}
     assert spec["path"] == "/x"
@@ -396,10 +396,10 @@ def test_childspec_total_false() -> None:
 
 - [ ] **Step 2: Run test, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -v`
-Expected: errors importing `spark_az.pipeline_logger`.
+Run: `python -m pytest tests/test_lgr.py -v`
+Expected: errors importing `spark_az.lgr`.
 
-- [ ] **Step 3: Implement initial slice of `src/spark_az/pipeline_logger.py`**
+- [ ] **Step 3: Implement initial slice of `src/spark_az/lgr.py`**
 
 ```python
 """Synapse orchestrator + Delta logging.
@@ -550,14 +550,14 @@ __all__ = [
 
 - [ ] **Step 4: Run tests, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -v`
+Run: `python -m pytest tests/test_lgr.py -v`
 Expected: `4 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger.py
-git commit -m "feat(pipeline_logger): log schema + ChildSpec/ChildResult"
+git add src/spark_az/lgr.py tests/test_lgr.py
+git commit -m "feat(lgr): log schema + ChildSpec/ChildResult"
 ```
 
 ---
@@ -707,22 +707,22 @@ git commit -m "test: add fake_mssparkutils + local Spark fixtures"
 ## Task 5: `_truncate` helper
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py` (add helper)
-- Modify: `tests/test_pipeline_logger.py` (add tests)
+- Modify: `src/spark_az/lgr.py` (add helper)
+- Modify: `tests/test_lgr.py` (add tests)
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_truncate_under_limit_returns_input() -> None:
-    from spark_az.pipeline_logger import _truncate
+    from spark_az.lgr import _truncate
 
     assert _truncate("hello", limit=100) == "hello"
 
 
 def test_truncate_over_limit_appends_marker() -> None:
-    from spark_az.pipeline_logger import _truncate
+    from spark_az.lgr import _truncate
 
     out: str = _truncate("x" * 50, limit=20)
     assert out.startswith("x" * 20)
@@ -731,17 +731,17 @@ def test_truncate_over_limit_appends_marker() -> None:
 
 
 def test_truncate_empty_string_passes_through() -> None:
-    from spark_az.pipeline_logger import _truncate
+    from spark_az.lgr import _truncate
 
     assert _truncate("", limit=10) == ""
 ```
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k truncate -v`
+Run: `python -m pytest tests/test_lgr.py -k truncate -v`
 Expected: 3 errors, `ImportError: cannot import name '_truncate'`.
 
-- [ ] **Step 3: Implement `_truncate` in `pipeline_logger.py`**
+- [ ] **Step 3: Implement `_truncate` in `lgr.py`**
 
 Append (before `__all__`):
 
@@ -773,14 +773,14 @@ def _truncate(text: str, *, limit: int) -> str:
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k truncate -v`
+Run: `python -m pytest tests/test_lgr.py -k truncate -v`
 Expected: `3 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger.py
-git commit -m "feat(pipeline_logger): _truncate helper"
+git add src/spark_az/lgr.py tests/test_lgr.py
+git commit -m "feat(lgr): _truncate helper"
 ```
 
 ---
@@ -788,18 +788,18 @@ git commit -m "feat(pipeline_logger): _truncate helper"
 ## Task 6: `_nbutils` helper
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py`
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `src/spark_az/lgr.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_nbutils_returns_module_when_notebookutils_present(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import _nbutils
+    from spark_az.lgr import _nbutils
 
     nb: Any = _nbutils()
     assert nb is fake_mssparkutils
@@ -810,13 +810,13 @@ def test_nbutils_raises_when_neither_module_present(
 ) -> None:
     monkeypatch.setitem(sys.modules, "notebookutils", None)
     monkeypatch.setitem(sys.modules, "mssparkutils", None)
-    from spark_az.pipeline_logger import _nbutils
+    from spark_az.lgr import _nbutils
 
     with pytest.raises(RuntimeError, match="mssparkutils"):
         _nbutils()
 ```
 
-Also add to the imports at top of `tests/test_pipeline_logger.py` (after the existing imports):
+Also add to the imports at top of `tests/test_lgr.py` (after the existing imports):
 
 ```python
 import sys
@@ -824,10 +824,10 @@ import sys
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k nbutils -v`
+Run: `python -m pytest tests/test_lgr.py -k nbutils -v`
 Expected: `ImportError: cannot import name '_nbutils'`.
 
-- [ ] **Step 3: Implement `_nbutils` in `pipeline_logger.py`**
+- [ ] **Step 3: Implement `_nbutils` in `lgr.py`**
 
 Append (before `__all__`):
 
@@ -856,20 +856,20 @@ def _nbutils() -> Any:
         except ImportError:
             raise RuntimeError(
                 "mssparkutils / notebookutils not importable; "
-                "spark_az.pipeline_logger must run inside Azure Synapse."
+                "spark_az.lgr must run inside Azure Synapse."
             )
 ```
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k nbutils -v`
+Run: `python -m pytest tests/test_lgr.py -k nbutils -v`
 Expected: `2 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger.py
-git commit -m "feat(pipeline_logger): _nbutils Synapse runtime accessor"
+git add src/spark_az/lgr.py tests/test_lgr.py
+git commit -m "feat(lgr): _nbutils Synapse runtime accessor"
 ```
 
 ---
@@ -877,12 +877,12 @@ git commit -m "feat(pipeline_logger): _nbutils Synapse runtime accessor"
 ## Task 7: `ensure_log_table`
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py`
-- Create: `tests/test_pipeline_logger_delta.py`
+- Modify: `src/spark_az/lgr.py`
+- Create: `tests/test_lgr_delta.py`
 
 - [ ] **Step 1: Write the failing integration test**
 
-`tests/test_pipeline_logger_delta.py`:
+`tests/test_lgr_delta.py`:
 
 ```python
 """Integration tests that exercise a local Delta-enabled SparkSession."""
@@ -897,7 +897,7 @@ pytestmark = pytest.mark.usefixtures("registered_spark")
 
 
 def test_ensure_log_table_creates_table(spark: Any) -> None:
-    from spark_az.pipeline_logger import LOG_SCHEMA_FIELDS, ensure_log_table
+    from spark_az.lgr import LOG_SCHEMA_FIELDS, ensure_log_table
 
     table: str = "default.test_ensure_creates"
     spark.sql(f"DROP TABLE IF EXISTS {table}")
@@ -911,7 +911,7 @@ def test_ensure_log_table_creates_table(spark: Any) -> None:
 
 
 def test_ensure_log_table_is_idempotent(spark: Any) -> None:
-    from spark_az.pipeline_logger import ensure_log_table
+    from spark_az.lgr import ensure_log_table
 
     table: str = "default.test_ensure_idempotent"
     spark.sql(f"DROP TABLE IF EXISTS {table}")
@@ -925,10 +925,10 @@ def test_ensure_log_table_is_idempotent(spark: Any) -> None:
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger_delta.py -v`
+Run: `python -m pytest tests/test_lgr_delta.py -v`
 Expected: `ImportError: cannot import name 'ensure_log_table'`.
 
-- [ ] **Step 3: Implement `ensure_log_table` in `pipeline_logger.py`**
+- [ ] **Step 3: Implement `ensure_log_table` in `lgr.py`**
 
 Add `from .session import get_spark` near the top with the other imports (after `TYPE_CHECKING` block). Then append before `__all__`:
 
@@ -961,14 +961,14 @@ Also extend `__all__` to include `"ensure_log_table"`.
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger_delta.py -v`
+Run: `python -m pytest tests/test_lgr_delta.py -v`
 Expected: `2 passed`. (First run will be slow — Spark startup.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger_delta.py
-git commit -m "feat(pipeline_logger): ensure_log_table idempotent creator"
+git add src/spark_az/lgr.py tests/test_lgr_delta.py
+git commit -m "feat(lgr): ensure_log_table idempotent creator"
 ```
 
 ---
@@ -976,16 +976,16 @@ git commit -m "feat(pipeline_logger): ensure_log_table idempotent creator"
 ## Task 8: `_skipped_result` helper
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py`
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `src/spark_az/lgr.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_skipped_result_has_expected_fields() -> None:
-    from spark_az.pipeline_logger import ChildSpec, _skipped_result
+    from spark_az.lgr import ChildSpec, _skipped_result
 
     spec: ChildSpec = {"path": "/notebooks/load", "args": {"k": "v"}}
     result = _skipped_result(
@@ -1014,12 +1014,12 @@ def test_skipped_result_has_expected_fields() -> None:
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k skipped -v`
+Run: `python -m pytest tests/test_lgr.py -k skipped -v`
 Expected: `ImportError: cannot import name '_skipped_result'`.
 
 - [ ] **Step 3: Implement `_skipped_result`**
 
-Add `import json` and `from datetime import datetime, timezone` to the imports at the top of `pipeline_logger.py`. Then append before `__all__`:
+Add `import json` and `from datetime import datetime, timezone` to the imports at the top of `lgr.py`. Then append before `__all__`:
 
 ```python
 def _now_iso() -> str:
@@ -1104,14 +1104,14 @@ Also add `Optional` to the `typing` import line.
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k skipped -v`
+Run: `python -m pytest tests/test_lgr.py -k skipped -v`
 Expected: `1 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger.py
-git commit -m "feat(pipeline_logger): _skipped_result + ISO/args helpers"
+git add src/spark_az/lgr.py tests/test_lgr.py
+git commit -m "feat(lgr): _skipped_result + ISO/args helpers"
 ```
 
 ---
@@ -1119,12 +1119,12 @@ git commit -m "feat(pipeline_logger): _skipped_result + ISO/args helpers"
 ## Task 9: `_print_line` stdout helper
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py`
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `src/spark_az/lgr.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def _result_template() -> Dict[str, Any]:
@@ -1147,7 +1147,7 @@ def _result_template() -> Dict[str, Any]:
 
 
 def test_print_line_ok_status(capsys: pytest.CaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line
+    from spark_az.lgr import _print_line
 
     result: Dict[str, Any] = _result_template()
     _print_line(result, display_name="extract")
@@ -1160,7 +1160,7 @@ def test_print_line_ok_status(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_print_line_failed_status(capsys: pytest.CaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line
+    from spark_az.lgr import _print_line
 
     result: Dict[str, Any] = _result_template()
     result["status"] = "failed"
@@ -1178,7 +1178,7 @@ def test_print_line_failed_status(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_print_line_skipped_status(capsys: pytest.CaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line
+    from spark_az.lgr import _print_line
 
     result: Dict[str, Any] = _result_template()
     result["status"] = "skipped"
@@ -1193,7 +1193,7 @@ def test_print_line_skipped_status(capsys: pytest.CaptureFixture) -> None:
 
 
 def test_print_line_timeout_status(capsys: pytest.CaptureFixture) -> None:
-    from spark_az.pipeline_logger import _print_line
+    from spark_az.lgr import _print_line
 
     result: Dict[str, Any] = _result_template()
     result["status"] = "timeout"
@@ -1210,12 +1210,12 @@ def test_print_line_timeout_status(capsys: pytest.CaptureFixture) -> None:
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k print_line -v`
+Run: `python -m pytest tests/test_lgr.py -k print_line -v`
 Expected: `4` failures, `ImportError: cannot import name '_print_line'`.
 
 - [ ] **Step 3: Implement `_print_line`**
 
-Append to `pipeline_logger.py` before `__all__`:
+Append to `lgr.py` before `__all__`:
 
 ```python
 _STATUS_BADGE: Dict[str, str] = {
@@ -1276,14 +1276,14 @@ def _now_clock() -> str:
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k print_line -v`
+Run: `python -m pytest tests/test_lgr.py -k print_line -v`
 Expected: `4 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger.py
-git commit -m "feat(pipeline_logger): _print_line stdout formatter"
+git add src/spark_az/lgr.py tests/test_lgr.py
+git commit -m "feat(lgr): _print_line stdout formatter"
 ```
 
 ---
@@ -1291,16 +1291,16 @@ git commit -m "feat(pipeline_logger): _print_line stdout formatter"
 ## Task 10: `run_child` happy path
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py`
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `src/spark_az/lgr.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_run_child_success(fake_mssparkutils: Any) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     fake_mssparkutils.notebook.handler = lambda path, t, args: "42rows"
     spec: ChildSpec = {
@@ -1336,7 +1336,7 @@ def test_run_child_success(fake_mssparkutils: Any) -> None:
 
 
 def test_run_child_uses_default_timeout(fake_mssparkutils: Any) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     fake_mssparkutils.notebook.handler = lambda path, t, args: ""
     spec: ChildSpec = {"path": "/notebooks/x"}
@@ -1354,12 +1354,12 @@ def test_run_child_uses_default_timeout(fake_mssparkutils: Any) -> None:
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k run_child -v`
+Run: `python -m pytest tests/test_lgr.py -k run_child -v`
 Expected: `ImportError: cannot import name 'run_child'`.
 
 - [ ] **Step 3: Implement `run_child` (success path only for now)**
 
-Add `import time` and `import traceback` to imports. Append to `pipeline_logger.py` before `__all__`:
+Add `import time` and `import traceback` to imports. Append to `lgr.py` before `__all__`:
 
 ```python
 _TIMEOUT_HINTS: List[str] = ["timeout", "timed out"]
@@ -1485,14 +1485,14 @@ Extend `__all__` to include `"run_child"`.
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k run_child -v`
+Run: `python -m pytest tests/test_lgr.py -k run_child -v`
 Expected: `2 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger.py
-git commit -m "feat(pipeline_logger): run_child happy path + status mapping"
+git add src/spark_az/lgr.py tests/test_lgr.py
+git commit -m "feat(lgr): run_child happy path + status mapping"
 ```
 
 ---
@@ -1500,15 +1500,15 @@ git commit -m "feat(pipeline_logger): run_child happy path + status mapping"
 ## Task 11: `run_child` failure & timeout coverage
 
 **Files:**
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Add the failure-path tests**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_run_child_failure_captures_traceback(fake_mssparkutils: Any) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     def boom(path: str, timeout: int, args: Dict[str, Any]) -> Any:
         raise ValueError("missing column 'id'")
@@ -1533,7 +1533,7 @@ def test_run_child_failure_captures_traceback(fake_mssparkutils: Any) -> None:
 def test_run_child_timeout_routes_to_timeout_status(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     def slow(path: str, timeout: int, args: Dict[str, Any]) -> Any:
         raise RuntimeError("notebook timed out after 1800 seconds")
@@ -1556,7 +1556,7 @@ def test_run_child_timeout_routes_to_timeout_status(
 def test_run_child_truncates_giant_traceback(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_child
+    from spark_az.lgr import ChildSpec, run_child
 
     def boom(path: str, timeout: int, args: Dict[str, Any]) -> Any:
         raise RuntimeError("x" * 50000)
@@ -1578,14 +1578,14 @@ def test_run_child_truncates_giant_traceback(
 
 - [ ] **Step 2: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k run_child -v`
+Run: `python -m pytest tests/test_lgr.py -k run_child -v`
 Expected: `5 passed` (the original two plus the new three).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/test_pipeline_logger.py
-git commit -m "test(pipeline_logger): run_child failure + timeout coverage"
+git add tests/test_lgr.py
+git commit -m "test(lgr): run_child failure + timeout coverage"
 ```
 
 ---
@@ -1593,16 +1593,16 @@ git commit -m "test(pipeline_logger): run_child failure + timeout coverage"
 ## Task 12: `_append_rows` batched Delta write
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py`
-- Modify: `tests/test_pipeline_logger_delta.py`
+- Modify: `src/spark_az/lgr.py`
+- Modify: `tests/test_lgr_delta.py`
 
 - [ ] **Step 1: Write the failing integration test**
 
-Append to `tests/test_pipeline_logger_delta.py`:
+Append to `tests/test_lgr_delta.py`:
 
 ```python
 def test_append_rows_writes_all_columns_and_audited_at(spark: Any) -> None:
-    from spark_az.pipeline_logger import (
+    from spark_az.lgr import (
         LOG_SCHEMA_FIELDS,
         ChildResult,
         _append_rows,
@@ -1642,7 +1642,7 @@ def test_append_rows_writes_all_columns_and_audited_at(spark: Any) -> None:
 
 
 def test_append_rows_empty_is_noop(spark: Any) -> None:
-    from spark_az.pipeline_logger import _append_rows, ensure_log_table
+    from spark_az.lgr import _append_rows, ensure_log_table
 
     table: str = "default.test_append_empty"
     spark.sql(f"DROP TABLE IF EXISTS {table}")
@@ -1655,12 +1655,12 @@ def test_append_rows_empty_is_noop(spark: Any) -> None:
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger_delta.py -k append_rows -v`
+Run: `python -m pytest tests/test_lgr_delta.py -k append_rows -v`
 Expected: `ImportError: cannot import name '_append_rows'`.
 
 - [ ] **Step 3: Implement `_append_rows`**
 
-Append to `pipeline_logger.py` before `__all__`:
+Append to `lgr.py` before `__all__`:
 
 ```python
 def _append_rows(table: str, results: List[ChildResult]) -> None:
@@ -1720,14 +1720,14 @@ def _string_or_long(type_name: str) -> Any:
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger_delta.py -v`
+Run: `python -m pytest tests/test_lgr_delta.py -v`
 Expected: `4 passed` (2 from ensure + 2 from append).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger_delta.py
-git commit -m "feat(pipeline_logger): _append_rows batched Delta write"
+git add src/spark_az/lgr.py tests/test_lgr_delta.py
+git commit -m "feat(lgr): _append_rows batched Delta write"
 ```
 
 ---
@@ -1735,18 +1735,18 @@ git commit -m "feat(pipeline_logger): _append_rows batched Delta write"
 ## Task 13: `run_pipeline` — all-pass happy path
 
 **Files:**
-- Modify: `src/spark_az/pipeline_logger.py`
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `src/spark_az/lgr.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_run_pipeline_all_pass_returns_results(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     responses: Dict[str, str] = {
         "/notebooks/extract": "10rows",
@@ -1781,7 +1781,7 @@ def test_run_pipeline_outside_synapse_raises_before_loop(
 ) -> None:
     monkeypatch.setitem(sys.modules, "notebookutils", None)
     monkeypatch.setitem(sys.modules, "mssparkutils", None)
-    from spark_az.pipeline_logger import run_pipeline
+    from spark_az.lgr import run_pipeline
 
     with pytest.raises(RuntimeError, match="mssparkutils"):
         run_pipeline(
@@ -1794,12 +1794,12 @@ def test_run_pipeline_outside_synapse_raises_before_loop(
 
 - [ ] **Step 2: Run, expect failure**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k run_pipeline -v`
+Run: `python -m pytest tests/test_lgr.py -k run_pipeline -v`
 Expected: `ImportError: cannot import name 'run_pipeline'`.
 
 - [ ] **Step 3: Implement `run_pipeline` (happy path + outside-Synapse guard)**
 
-Add `import os` and `import uuid` to imports. Append to `pipeline_logger.py` before `__all__`:
+Add `import os` and `import uuid` to imports. Append to `lgr.py` before `__all__`:
 
 ```python
 def _display_name(spec: ChildSpec) -> str:
@@ -1936,14 +1936,14 @@ Extend `__all__` to include `"run_pipeline"`.
 
 - [ ] **Step 4: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k run_pipeline -v`
+Run: `python -m pytest tests/test_lgr.py -k run_pipeline -v`
 Expected: `2 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/spark_az/pipeline_logger.py tests/test_pipeline_logger.py
-git commit -m "feat(pipeline_logger): run_pipeline happy path + Synapse guard"
+git add src/spark_az/lgr.py tests/test_lgr.py
+git commit -m "feat(lgr): run_pipeline happy path + Synapse guard"
 ```
 
 ---
@@ -1951,17 +1951,17 @@ git commit -m "feat(pipeline_logger): run_pipeline happy path + Synapse guard"
 ## Task 14: `run_pipeline` — `fail_fast=True` failure path
 
 **Files:**
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Add the failure tests**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_run_pipeline_fail_fast_skips_remaining_and_raises(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
         if path == "/notebooks/transform":
@@ -1994,7 +1994,7 @@ def test_run_pipeline_fail_fast_writes_log_before_raising(
     fake_mssparkutils: Any, registered_spark: Any
 ) -> None:
     """The Delta log must be durable even on fail_fast re-raise."""
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     spark: Any = registered_spark
     table: str = "default.test_runpipeline_failfast"
@@ -2028,7 +2028,7 @@ def test_run_pipeline_fail_fast_writes_log_before_raising(
 
 - [ ] **Step 2: Run, expect pass** (the implementation from Task 13 already handles this — these tests verify the full contract)
 
-Run: `python -m pytest tests/test_pipeline_logger.py tests/test_pipeline_logger_delta.py -k run_pipeline -v`
+Run: `python -m pytest tests/test_lgr.py tests/test_lgr_delta.py -k run_pipeline -v`
 Expected: All tests pass (including the two new ones).
 
 If any fail, re-read Task 13's implementation against the failing assertion and fix before continuing.
@@ -2036,8 +2036,8 @@ If any fail, re-read Task 13's implementation against the failing assertion and 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/test_pipeline_logger.py
-git commit -m "test(pipeline_logger): fail_fast skips + writes log before raise"
+git add tests/test_lgr.py
+git commit -m "test(lgr): fail_fast skips + writes log before raise"
 ```
 
 ---
@@ -2045,17 +2045,17 @@ git commit -m "test(pipeline_logger): fail_fast skips + writes log before raise"
 ## Task 15: `run_pipeline` — `fail_fast=False`
 
 **Files:**
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Add the test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_run_pipeline_fail_fast_false_runs_everything(
     fake_mssparkutils: Any,
 ) -> None:
-    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+    from spark_az.lgr import ChildSpec, run_pipeline
 
     def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
         if path == "/notebooks/middle":
@@ -2090,14 +2090,14 @@ def test_run_pipeline_fail_fast_false_runs_everything(
 
 - [ ] **Step 2: Run, expect pass**
 
-Run: `python -m pytest tests/test_pipeline_logger.py -k fail_fast_false -v`
+Run: `python -m pytest tests/test_lgr.py -k fail_fast_false -v`
 Expected: `1 passed`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/test_pipeline_logger.py
-git commit -m "test(pipeline_logger): fail_fast=False runs everything"
+git add tests/test_lgr.py
+git commit -m "test(lgr): fail_fast=False runs everything"
 ```
 
 ---
@@ -2106,7 +2106,7 @@ git commit -m "test(pipeline_logger): fail_fast=False runs everything"
 
 **Files:**
 - Modify: `src/spark_az/__init__.py`
-- Modify: `tests/test_pipeline_logger.py`
+- Modify: `tests/test_lgr.py`
 
 - [ ] **Step 1: Replace `src/spark_az/__init__.py`**
 
@@ -2114,7 +2114,7 @@ git commit -m "test(pipeline_logger): fail_fast=False runs everything"
 """Azure Synapse Spark notebook orchestration + Delta logging."""
 from __future__ import annotations
 
-from .pipeline_logger import (
+from .lgr import (
     ChildResult,
     ChildSpec,
     ensure_log_table,
@@ -2136,7 +2136,7 @@ __all__ = [
 
 - [ ] **Step 2: Add the smoke test**
 
-Append to `tests/test_pipeline_logger.py`:
+Append to `tests/test_lgr.py`:
 
 ```python
 def test_public_api_reexported_from_package_root() -> None:
@@ -2159,21 +2159,21 @@ def test_public_api_reexported_from_package_root() -> None:
 - [ ] **Step 3: Run the whole suite**
 
 Run: `python -m pytest -v`
-Expected: every test passes (sessions + pipeline_logger unit + delta integration).
+Expected: every test passes (sessions + lgr unit + delta integration).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/spark_az/__init__.py tests/test_pipeline_logger.py
+git add src/spark_az/__init__.py tests/test_lgr.py
 git commit -m "feat(spark_az): re-export public API + smoke test"
 ```
 
 ---
 
-## Task 17: `notebooks/pipeline_logger.py` (jupytext source)
+## Task 17: `notebooks/_logging/lgr.py` (jupytext source)
 
 **Files:**
-- Create: `notebooks/pipeline_logger.py`
+- Create: `notebooks/_logging/lgr.py`
 
 - [ ] **Step 1: Create the notebooks directory**
 
@@ -2181,7 +2181,7 @@ git commit -m "feat(spark_az): re-export public API + smoke test"
 mkdir -p notebooks
 ```
 
-- [ ] **Step 2: Write `notebooks/pipeline_logger.py`** (jupytext "percent" format)
+- [ ] **Step 2: Write `notebooks/_logging/lgr.py`** (jupytext "percent" format)
 
 ```python
 # ---
@@ -2199,7 +2199,7 @@ mkdir -p notebooks
 # ---
 
 # %% [markdown]
-# # pipeline_logger
+# # lgr
 #
 # Orchestrates child Synapse notebooks via mssparkutils.notebook.run and
 # writes a Delta log row per child. Invoke from a Synapse pipeline
@@ -2232,14 +2232,14 @@ The `# %%` and `# %% tags=["parameters"]` lines are jupytext cell markers (not "
 
 - [ ] **Step 3: Verify the file is valid Python**
 
-Run: `python -c "import ast; ast.parse(open('notebooks/pipeline_logger.py').read()); print('ok')"`
+Run: `python -c "import ast; ast.parse(open('notebooks/_logging/lgr.py').read()); print('ok')"`
 Expected: `ok`.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add notebooks/pipeline_logger.py
-git commit -m "feat(notebook): jupytext orchestrator pipeline_logger.py"
+git add notebooks/_logging/lgr.py
+git commit -m "feat(notebook): jupytext orchestrator lgr.py"
 ```
 
 ---
@@ -2248,7 +2248,7 @@ git commit -m "feat(notebook): jupytext orchestrator pipeline_logger.py"
 
 **Files:**
 - Create: `scripts/build_notebooks.sh`
-- Create: `notebooks/pipeline_logger.ipynb` (generated)
+- Create: `notebooks/_logging/lgr.ipynb` (generated)
 
 - [ ] **Step 1: Write `scripts/build_notebooks.sh`**
 
@@ -2269,22 +2269,22 @@ chmod +x scripts/build_notebooks.sh
 - [ ] **Step 3: Run the build**
 
 Run: `bash scripts/build_notebooks.sh`
-Expected: stdout contains `[jupytext] Writing notebooks/pipeline_logger.ipynb` (or similar), and the file `notebooks/pipeline_logger.ipynb` now exists.
+Expected: stdout contains `[jupytext] Writing notebooks/_logging/lgr.ipynb` (or similar), and the file `notebooks/_logging/lgr.ipynb` now exists.
 
 - [ ] **Step 4: Verify the generated notebook is valid JSON and has a parameter cell**
 
-Run: `python -c "import json,sys; nb=json.load(open('notebooks/pipeline_logger.ipynb')); tags=[c.get('metadata',{}).get('tags',[]) for c in nb['cells']]; print('ok' if any('parameters' in t for t in tags) else sys.exit('no parameter cell'))"`
+Run: `python -c "import json,sys; nb=json.load(open('notebooks/_logging/lgr.ipynb')); tags=[c.get('metadata',{}).get('tags',[]) for c in nb['cells']]; print('ok' if any('parameters' in t for t in tags) else sys.exit('no parameter cell'))"`
 Expected: `ok`.
 
 - [ ] **Step 5: Round-trip check (`.py` and `.ipynb` stay in sync)**
 
-Run: `jupytext --test notebooks/pipeline_logger.py`
+Run: `jupytext --test notebooks/_logging/lgr.py`
 Expected: exits 0 with no diff.
 
 - [ ] **Step 6: Commit both**
 
 ```bash
-git add scripts/build_notebooks.sh notebooks/pipeline_logger.ipynb
+git add scripts/build_notebooks.sh notebooks/_logging/lgr.ipynb
 git commit -m "build(notebooks): jupytext build script + generated ipynb"
 ```
 

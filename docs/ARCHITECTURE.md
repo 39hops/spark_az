@@ -20,16 +20,16 @@ no schema management. It is intentionally small.
                             v
 +----------------------------------------------------------+
 | Orchestrator notebook                                    |
-|   - notebooks/pipeline_logger.ipynb (thin wrapper, uses  |
+|   - notebooks/_logging/lgr.ipynb (thin wrapper, uses  |
 |     installed `spark_az` wheel), OR                      |
-|   - notebooks/pipeline_logger_inline.ipynb (entire       |
+|   - notebooks/_logging/lgr_inline.ipynb (entire       |
 |     library inline; %run-able or pipeline-activity-able) |
 +----------------------------------------------------------+
                             |
               run_pipeline(specs, log_table=..., ...)
                             v
 +----------------------------------------------------------+
-| spark_az.pipeline_logger                                 |
+| spark_az.lgr                                 |
 |   - run_pipeline → run_child per spec → _append_rows     |
 |   - ensure_log_table (idempotent Delta create)           |
 |   - _print_line via logging.Logger                       |
@@ -53,14 +53,14 @@ no schema management. It is intentionally small.
 
 | Interface | Contract | Code |
 |---|---|---|
-| `run_pipeline(children, *, log_table, pipeline_name, fail_fast=True, default_timeout_seconds=1800, write_log=True) -> List[ChildResult]` | Sequentially run children; batch one Delta append at end; re-raise on first failure when `fail_fast=True`. Returns full result list otherwise. | `src/spark_az/pipeline_logger.py` |
-| `run_child(spec, *, pipeline_run_id, pipeline_name, child_index, default_timeout_seconds=1800) -> ChildResult` | Run a single child via `mssparkutils.notebook.run`; never raises; map status to `ok` / `failed` / `timeout`. | `src/spark_az/pipeline_logger.py` |
-| `ensure_log_table(table) -> None` | Idempotent Delta-table creation with the canonical schema. | `src/spark_az/pipeline_logger.py` |
-| `ChildSpec` | TypedDict: `path` (required) + optional `timeout_seconds`, `args`, `name`. | `src/spark_az/pipeline_logger.py` |
-| `ChildResult` | TypedDict: every column of the log table except `audited_at` (stamped at write time). | `src/spark_az/pipeline_logger.py` |
+| `run_pipeline(children, *, log_table, pipeline_name, fail_fast=True, default_timeout_seconds=1800, write_log=True) -> List[ChildResult]` | Sequentially run children; batch one Delta append at end; re-raise on first failure when `fail_fast=True`. Returns full result list otherwise. | `src/spark_az/lgr.py` |
+| `run_child(spec, *, pipeline_run_id, pipeline_name, child_index, default_timeout_seconds=1800) -> ChildResult` | Run a single child via `mssparkutils.notebook.run`; never raises; map status to `ok` / `failed` / `timeout`. | `src/spark_az/lgr.py` |
+| `ensure_log_table(table) -> None` | Idempotent Delta-table creation with the canonical schema. | `src/spark_az/lgr.py` |
+| `ChildSpec` | TypedDict: `path` (required) + optional `timeout_seconds`, `args`, `name`. | `src/spark_az/lgr.py` |
+| `ChildResult` | TypedDict: every column of the log table except `audited_at` (stamped at write time). | `src/spark_az/lgr.py` |
 | `set_spark(session)` / `get_spark() -> SparkSession` | Module-singleton SparkSession lookup. Never calls `SparkSession.builder.getOrCreate()`. | `src/spark_az/session.py` |
-| `log: logging.Logger` | Module-level `"spark_az.pipeline_logger"` logger with idempotent handler setup. Attach `AzureLogHandler` to fan out. | `src/spark_az/pipeline_logger.py` |
-| `mssparkutils.notebook.run(path, timeout_seconds, args)` | External boundary; resolved via `_nbutils()` which tries `notebookutils.mssparkutils` then bare `mssparkutils`. Stubbed in tests via `fake_mssparkutils`. | `src/spark_az/pipeline_logger.py` |
+| `log: logging.Logger` | Module-level `"spark_az.lgr"` logger with idempotent handler setup. Attach `AzureLogHandler` to fan out. | `src/spark_az/lgr.py` |
+| `mssparkutils.notebook.run(path, timeout_seconds, args)` | External boundary; resolved via `_nbutils()` which tries `notebookutils.mssparkutils` then bare `mssparkutils`. Stubbed in tests via `fake_mssparkutils`. | `src/spark_az/lgr.py` |
 
 ## Data flow
 
@@ -99,19 +99,19 @@ no schema management. It is intentionally small.
 src/spark_az/
 ├── __init__.py          # public surface re-exports
 ├── session.py           # get_spark / set_spark
-├── pipeline_logger.py   # ChildSpec, ChildResult, run_child, run_pipeline,
+├── lgr.py   # ChildSpec, ChildResult, run_child, run_pipeline,
 │                        # ensure_log_table, _append_rows, helpers
 └── py.typed             # PEP 561 marker
 
 tests/
 ├── conftest.py                            # fake_mssparkutils + local Spark fixtures
 ├── test_session.py                        # 4 unit tests
-├── test_pipeline_logger.py                # 26 unit tests with fake_mssparkutils
-└── test_pipeline_logger_delta.py          # 4 integration tests with local Delta
+├── test_lgr.py                # 26 unit tests with fake_mssparkutils
+└── test_lgr_delta.py          # 4 integration tests with local Delta
 
 notebooks/
-├── pipeline_logger.{py,ipynb}             # thin wrapper, imports installed library
-└── pipeline_logger_inline.{py,ipynb}      # entire library inline, %run-able
+├── lgr.{py,ipynb}             # thin wrapper, imports installed library
+└── lgr_inline.{py,ipynb}      # entire library inline, %run-able
 ```
 
 ## Design rationale (pointers)

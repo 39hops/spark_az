@@ -13,7 +13,7 @@ calls many children via `mssparkutils.notebook.run`, captures exit values
 and exceptions, and writes one queryable row per child to a managed Delta
 table. Two delivery formats live side-by-side: an installable wheel
 (`src/spark_az/`) and a single self-contained Synapse notebook
-(`notebooks/pipeline_logger_inline.ipynb`) that `%run` can pull into any
+(`notebooks/_logging/lgr_inline.ipynb`) that `%run` can pull into any
 other notebook with zero install.
 
 The style and conventions mirror the author's companion library
@@ -82,7 +82,7 @@ scripts/build_notebooks.sh
 - **Naming:** `snake_case` for functions and variables, `PascalCase`
   for classes and TypedDicts, leading underscore for module-private.
 - **File size:** keep `src/spark_az/` files under ~500 lines each;
-  `pipeline_logger.py` is intentionally a single module per the design
+  `lgr.py` is intentionally a single module per the design
   spec (Approach A — refactor into submodules if it grows past ~700).
 - **Tests:** `tests/test_<module>.py` for unit, `tests/test_<module>_delta.py`
   for integration tests that need a local SparkSession.

@@ -113,22 +113,22 @@ def _reset_spark_registration(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _reset_pipeline_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reset pipeline_logger module-level singletons between tests."""
-    from spark_az import pipeline_logger as pl
+    """Reset lgr module-level singletons between tests."""
+    from spark_az import lgr as pl
 
     monkeypatch.setattr(pl, "_active_run_id", None, raising=False)
     monkeypatch.setattr(pl, "_APP_INSIGHTS_ENABLED", False, raising=False)
 
 
 @pytest.fixture(autouse=True)
-def _propagate_pipeline_logger_to_caplog(
+def _propagate_lgr_to_caplog(
     caplog: pytest.LogCaptureFixture,
 ) -> Any:
-    """Add caplog's handler directly to the pipeline_logger so that records
+    """Add caplog's handler directly to the lgr so that records
     are captured even though the logger has ``propagate=False``."""
     import logging
 
-    logger: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
+    logger: logging.Logger = logging.getLogger("spark_az.lgr")
     logger.addHandler(caplog.handler)
     try:
         yield
