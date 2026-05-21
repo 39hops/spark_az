@@ -68,7 +68,7 @@ def fake_mssparkutils(monkeypatch: pytest.MonkeyPatch) -> FakeMssparkutils:
     fake: FakeMssparkutils = FakeMssparkutils()
 
     notebookutils: types.ModuleType = types.ModuleType("notebookutils")
-    notebookutils.mssparkutils = fake
+    setattr(notebookutils, "mssparkutils", fake)
     monkeypatch.setitem(sys.modules, "notebookutils", notebookutils)
     monkeypatch.setitem(sys.modules, "mssparkutils", fake)
     return fake
@@ -112,7 +112,7 @@ def _reset_spark_registration(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def registered_spark(spark: Any) -> Any:
     """Register the local Spark session with the package and yield it."""
-    from spark_az import set_spark
+    from spark_az.session import set_spark
 
     set_spark(spark)
     return spark
