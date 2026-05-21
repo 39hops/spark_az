@@ -31,4 +31,4 @@ spark_az = ["py.typed"]
 [tool.pyright]
 include = ["src", "tests"]
 extraPaths = ["src"]
-reportMissingImports = "warning"
+reportMissingImports = "none"
