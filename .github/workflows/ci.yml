@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  # Placeholder CI job. Replace the run-steps with your real build/test
+  # commands once the project picks a stack. This job exists so PRs get
+  # a green check on day one rather than a missing status.
+  placeholder:
+    name: Placeholder build + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show repo state
+        run: |
+          echo "Repo layout:"
+          ls -la
+          echo
+          echo "Replace this CI placeholder with your real build and test"
+          echo "commands. Until then, this job just confirms the checkout"
+          echo "worked and exits green."
+
+      - name: Run setup placeholder
+        run: |
+          if [ -x scripts/setup.sh ]; then
+            scripts/setup.sh
+          else
+            echo "scripts/setup.sh not executable - skipping"
+          fi
+
+      - name: Run build placeholder
+        run: |
+          if [ -x scripts/build.sh ]; then
+            scripts/build.sh
+          else
+            echo "scripts/build.sh not executable - skipping"
+          fi
+
+      - name: Run test placeholder
+        run: |
+          if [ -x scripts/test.sh ]; then
+            scripts/test.sh
+          else
+            echo "scripts/test.sh not executable - skipping"
+          fi

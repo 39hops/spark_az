@@ -1,0 +1,69 @@
+name: Doc sync
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# This workflow runs a cheap honesty check on AGENTS.md, CLAUDE.md, and the
+# files under docs/: if any of them reference a path inside this repo that
+# doesn't exist, fail the build. Cheap defense against doc rot.
+#
+# The check is deliberately narrow:
+#   - Only matches backtick-quoted paths starting with one of the known repo
+#     top-level dirs (src/, tests/, docs/, scripts/, skills/, plugins/,
+#     handoffs/, tools/, .github/, .claude/).
+#   - Skips entries that contain template placeholders: angle brackets
+#     (<topic>, <YYYY-MM-DD>, etc.) or brace expansion ({a,b,c}). These
+#     are examples in docs, not real path references.
+# Expand the pattern as conventions grow.
+
+jobs:
+  check-doc-paths:
+    name: Doc-referenced paths exist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that doc-referenced paths exist
+        run: |
+          # NOTE: deliberately no `pipefail` here. The inner grep chain
+          # often returns 1 when a doc has no matching backtick paths,
+          # which is a normal case (not an error). We track failures
+          # through a temp file instead.
+          set -eu
+          missing=$(mktemp)
+          docs_to_scan=(AGENTS.md CLAUDE.md CONTRIBUTING.md README.md)
+          while IFS= read -r f; do
+            docs_to_scan+=("$f")
+          done < <(find docs -type f -name '*.md' 2>/dev/null || true)
+
+          for doc in "${docs_to_scan[@]}"; do
+            [ -f "$doc" ] || continue
+            # Extract backtick-quoted strings, keep only ones that look
+            # like a repo-relative path, drop template placeholders.
+            grep -oE '`[^`]+`' "$doc" 2>/dev/null \
+              | sed 's/^`//;s/`$//' \
+              | grep -E '^(src|tests|docs|scripts|skills|plugins|handoffs|tools|\.github|\.claude)/' \
+              | grep -vE '[<>{}]' \
+              | sort -u \
+              | while IFS= read -r ref; do
+                  clean=$(echo "$ref" | sed 's/[.,;:)]*$//')
+                  if [ ! -e "$clean" ]; then
+                    echo "::error file=$doc::references missing path: $clean"
+                    echo "$doc:$clean" >> "$missing"
+                  fi
+                done || true
+          done
+
+          if [ -s "$missing" ]; then
+            echo
+            echo "Doc-referenced paths above do not exist in this repo."
+            echo "Either fix the doc, or create the missing path."
+            cat "$missing"
+            rm -f "$missing"
+            exit 1
+          fi
+          rm -f "$missing"
+          echo "All doc-referenced repo paths resolved."

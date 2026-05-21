@@ -1,0 +1,61 @@
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.*.kate-swp
+.netrwhist
+
+# Build outputs (common across languages)
+build/
+build-*/
+dist/
+out/
+target/
+bin/
+obj/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.exe
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+node_modules/
+.next/
+.nuxt/
+.svelte-kit/
+.cache/
+coverage/
+.nyc_output/
+*.log
+
+# Local config and secrets
+.env
+.env.local
+.env.*.local
+*.local
+
+# Local agent state — operator's per-machine Claude Code settings live here.
+# Project-level shared settings (.claude/settings.json) ARE committed.
+.claude/settings.local.json
+.claude/.session/
+
+# Local runs / artifacts directories — these are conventionally where
+# benchmarks, eval outputs, and other measurement artifacts land. Keep them
+# out of git so the repo stays clean.
+runs/
+artifacts/
