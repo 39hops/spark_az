@@ -132,8 +132,10 @@ def test_skipped_result_has_expected_fields() -> None:
 
 import logging
 
+from spark_az.pipeline_logger import ChildResult as _ChildResult
 
-def _result_template() -> Dict[str, Any]:
+
+def _result_template() -> "_ChildResult":
     return {
         "pipeline_run_id": "r",
         "pipeline_name": "p",

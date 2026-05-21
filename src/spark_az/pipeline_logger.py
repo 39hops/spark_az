@@ -15,7 +15,9 @@ Public API
 Conventions
 -----------
 - The log table is a managed Delta table (e.g. ``"lab.__pipeline_runlog"``).
-- Stdout is plain ``print()`` — audience is the Synapse cell output.
+- Per-child output goes through ``logging.Logger`` ``spark_az.pipeline_logger``
+  at ``INFO``; attach an ``AzureLogHandler`` to fan out to Application
+  Insights without touching this module.
 - ``mssparkutils.notebook.run`` is blocking; orchestration is sequential
   in v1.
 """
@@ -45,17 +47,21 @@ if TYPE_CHECKING:
     from pyspark.sql.types import StructType
 
 
+_HANDLER_NAME: str = "spark_az.pipeline_logger.default"
+
 log: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
-_handler: logging.Handler = logging.StreamHandler()
-_handler.setFormatter(
-    logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+if not any(h.get_name() == _HANDLER_NAME for h in log.handlers):
+    _handler: logging.Handler = logging.StreamHandler()
+    _handler.set_name(_HANDLER_NAME)
+    _handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
     )
-)
-log.addHandler(_handler)
-log.setLevel(logging.INFO)
-log.propagate = False
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
 
 
 LOG_SCHEMA_FIELDS: List[Tuple[str, str]] = [

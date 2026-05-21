@@ -217,17 +217,21 @@ def _active_spark_session() -> Optional["SparkSession"]:
 # Application Insights without changing any code in this notebook.
 
 # %%
+_HANDLER_NAME: str = "spark_az.pipeline_logger.default"
+
 log: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
-_handler: logging.Handler = logging.StreamHandler()
-_handler.setFormatter(
-    logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+if not any(h.get_name() == _HANDLER_NAME for h in log.handlers):
+    _handler: logging.Handler = logging.StreamHandler()
+    _handler.set_name(_HANDLER_NAME)
+    _handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
     )
-)
-log.addHandler(_handler)
-log.setLevel(logging.INFO)
-log.propagate = False
+    log.addHandler(_handler)
+    log.setLevel(logging.INFO)
+    log.propagate = False
 
 # %% [markdown]
 # ## Schema and TypedDicts
