@@ -349,3 +349,52 @@ def test_run_child_truncates_giant_traceback(
     assert result["error_message"].endswith("…[truncated]")
     assert len(result["error_message"]) <= 4096 + len("…[truncated]")
     assert result["error_traceback"].endswith("…[truncated]")
+
+
+def test_run_pipeline_all_pass_returns_results(
+    fake_mssparkutils: Any,
+) -> None:
+    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+
+    responses: Dict[str, str] = {
+        "/notebooks/extract": "10rows",
+        "/notebooks/transform": "10rows",
+        "/notebooks/load": "ok",
+    }
+    fake_mssparkutils.notebook.handler = (
+        lambda path, t, args: responses[path]
+    )
+
+    specs: List[ChildSpec] = [
+        {"path": "/notebooks/extract"},
+        {"path": "/notebooks/transform"},
+        {"path": "/notebooks/load"},
+    ]
+
+    results = run_pipeline(
+        specs,
+        log_table="ignored",
+        pipeline_name="nightly",
+        write_log=False,
+    )
+
+    assert [r["status"] for r in results] == ["ok", "ok", "ok"]
+    assert [r["child_index"] for r in results] == [0, 1, 2]
+    assert {r["pipeline_run_id"] for r in results} == {results[0]["pipeline_run_id"]}
+    assert results[0]["pipeline_name"] == "nightly"
+
+
+def test_run_pipeline_outside_synapse_raises_before_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "notebookutils", None)
+    monkeypatch.setitem(sys.modules, "mssparkutils", None)
+    from spark_az.pipeline_logger import run_pipeline
+
+    with pytest.raises(RuntimeError, match="mssparkutils"):
+        run_pipeline(
+            [{"path": "/x"}],
+            log_table="t",
+            pipeline_name="p",
+            write_log=False,
+        )

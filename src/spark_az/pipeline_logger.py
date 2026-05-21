@@ -23,13 +23,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Iterable,
     List,
     Optional,
     Tuple,
@@ -560,6 +563,143 @@ def _string_or_long(type_name: str) -> Any:
     return StringType()
 
 
+def _display_name(spec: ChildSpec) -> str:
+    """Resolve the display name for log lines.
+
+    Returns the explicit ``name`` from the spec if provided, otherwise the
+    basename of ``path``. Falls back to the raw path when basename is
+    empty (e.g. paths ending in a slash).
+    """
+    explicit: Optional[str] = spec.get("name")
+    if explicit:
+        return str(explicit)
+    return os.path.basename(str(spec["path"]).rstrip("/")) or str(spec["path"])
+
+
+def run_pipeline(
+    children: Iterable[ChildSpec],
+    *,
+    log_table: str,
+    pipeline_name: str,
+    fail_fast: bool = True,
+    default_timeout_seconds: int = 1800,
+    write_log: bool = True,
+) -> List[ChildResult]:
+    """Run a sequence of child notebooks and log each one.
+
+    Generates one ``pipeline_run_id`` (UUID4) for the call. For each child:
+
+    1. Calls ``mssparkutils.notebook.run(path, timeout_seconds, args)``.
+    2. Captures wall time, exit value, and exception (if any).
+    3. Emits one stdout line via the module logger.
+    4. Appends a :class:`ChildResult` to the in-memory result list.
+
+    After the loop, the full result list is written to ``log_table`` in
+    one Delta append (when ``write_log=True``). If ``fail_fast=True`` and
+    any child failed, the captured failure is re-raised AFTER the log
+    write so the orchestrator notebook itself fails in Synapse and the
+    log table is durable for post-mortem.
+
+    Args:
+        children: Iterable of :class:`ChildSpec` entries.
+        log_table: Fully-qualified managed Delta table for the log rows.
+            Created via :func:`ensure_log_table` if missing.
+        pipeline_name: Caller-supplied label stamped on every row.
+        fail_fast: When ``True`` (default), the first failure marks
+            remaining children as ``status="skipped"`` and the call
+            re-raises after the log write. When ``False``, every child is
+            attempted and the call returns normally with failures captured
+            as rows.
+        default_timeout_seconds: Used when a :class:`ChildSpec` does not
+            specify its own ``timeout_seconds``.
+        write_log: When ``False``, emits stdout but skips the Delta
+            write. Used by tests and dry runs.
+
+    Returns:
+        When ``fail_fast=False`` or all children succeeded: the full
+        ``List[ChildResult]`` in input order, including ``"skipped"``
+        rows if any. When ``fail_fast=True`` and a child failed, the
+        function re-raises instead of returning — the full list is
+        durable in ``log_table`` for the caller to query.
+
+    Raises:
+        RuntimeError: ``mssparkutils`` / ``notebookutils`` not importable
+            (not running in Synapse). Raised before the child loop.
+        RuntimeError: Re-raised after the log write when ``fail_fast=True``
+            and any child failed. The exception carries the first failing
+            child's ``error_class`` and ``error_message``.
+
+    Examples:
+        Sequential run with fail-fast:
+
+        >>> results = run_pipeline(
+        ...     [
+        ...         {"path": "/notebooks/extract", "args": {"date": "2026-05-21"}},
+        ...         {"path": "/notebooks/transform"},
+        ...         {"path": "/notebooks/load"},
+        ...     ],
+        ...     log_table="lab.__pipeline_runlog",
+        ...     pipeline_name="nightly_lab_refresh",
+        ... )
+
+        Run-all (continue past failures):
+
+        >>> results = run_pipeline(
+        ...     specs,
+        ...     log_table="lab.__pipeline_runlog",
+        ...     pipeline_name="p",
+        ...     fail_fast=False,
+        ... )
+        >>> failed = [r for r in results if r["status"] != "ok"]
+    """
+    _nbutils()
+
+    pipeline_run_id: str = str(uuid.uuid4())
+    orchestrator: str = _orchestrator_notebook_name()
+    spec_list: List[ChildSpec] = list(children)
+    results: List[ChildResult] = []
+    first_failure: Optional[ChildResult] = None
+
+    try:
+        for i, spec in enumerate(spec_list):
+            if first_failure is not None and fail_fast:
+                skipped: ChildResult = _skipped_result(
+                    spec,
+                    pipeline_run_id=pipeline_run_id,
+                    pipeline_name=pipeline_name,
+                    child_index=i,
+                    orchestrator_notebook=orchestrator,
+                )
+                results.append(skipped)
+                _print_line(skipped, display_name=_display_name(spec))
+                continue
+            result: ChildResult = run_child(
+                spec,
+                pipeline_run_id=pipeline_run_id,
+                pipeline_name=pipeline_name,
+                child_index=i,
+                default_timeout_seconds=default_timeout_seconds,
+            )
+            results.append(result)
+            _print_line(result, display_name=_display_name(spec))
+            if result["status"] != "ok" and first_failure is None:
+                first_failure = result
+    finally:
+        if write_log:
+            ensure_log_table(log_table)
+            _append_rows(log_table, results)
+
+    if first_failure is not None and fail_fast:
+        raise RuntimeError(
+            f"child {first_failure['child_index']} "
+            f"({first_failure['notebook_path']}) "
+            f"{first_failure['status']}: "
+            f"{first_failure['error_class']}: "
+            f"{first_failure['error_message']}"
+        )
+    return results
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",
@@ -567,4 +707,5 @@ __all__ = [
     "ensure_log_table",
     "log",
     "run_child",
+    "run_pipeline",
 ]
