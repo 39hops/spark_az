@@ -24,8 +24,8 @@ Public API
 
 Conventions
 -----------
-- The log table is a managed Delta table (e.g. ``"lab.__pipeline_runlog"``).
-- Per-child output goes through ``logging.Logger`` ``spark_az.pipeline_logger``
+- The log table is a managed Delta table (e.g. ``"_meta.__pipeline_runlog"``).
+- Per-child output goes through ``logging.Logger`` ``spark_az.lgr``
   at ``INFO``; attach an ``AzureLogHandler`` (or call
   :func:`enable_app_insights`) to fan out without touching this module.
 - ``mssparkutils.notebook.run`` is blocking; orchestration is sequential.
@@ -58,9 +58,9 @@ if TYPE_CHECKING:
     from pyspark.sql.types import StructType
 
 
-_HANDLER_NAME: str = "spark_az.pipeline_logger.default"
+_HANDLER_NAME: str = "spark_az.lgr.default"
 
-log: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
+log: logging.Logger = logging.getLogger("spark_az.lgr")
 if not any(h.get_name() == _HANDLER_NAME for h in log.handlers):
     _handler: logging.Handler = logging.StreamHandler()
     _handler.set_name(_HANDLER_NAME)
@@ -234,26 +234,33 @@ def _nbutils() -> Any:
         except ImportError:
             raise RuntimeError(
                 "mssparkutils / notebookutils not importable; "
-                "spark_az.pipeline_logger must run inside Azure Synapse."
+                "spark_az.lgr must run inside Azure Synapse."
             )
 
 
 def ensure_log_table(table: str) -> None:
-    """Create the log Delta table if it does not exist.
+    """Create the log Delta table (and its database) if missing.
 
     Idempotent. Mirrors :meth:`SyncState.ensure` in spark_lib: checks
-    ``spark.catalog.tableExists(table)``; otherwise writes an empty
-    DataFrame with :func:`_log_schema` as a managed Delta table.
+    ``spark.catalog.tableExists(table)``; otherwise runs
+    ``CREATE DATABASE IF NOT EXISTS <db>`` for any database prefix on
+    ``table`` then writes an empty DataFrame with :func:`_log_schema`
+    as a managed Delta table.
 
     Args:
-        table: Fully-qualified managed Delta table name.
+        table: Fully-qualified managed Delta table name
+            (e.g. ``"_meta.__pipeline_runlog"``). A bare table name
+            without a database prefix is also accepted.
 
     Examples:
-        >>> ensure_log_table("lab.__pipeline_runlog")
+        >>> ensure_log_table("_meta.__pipeline_runlog")
     """
     spark: Any = get_spark()
     if spark.catalog.tableExists(table):
         return
+    if "." in table:
+        db: str = table.split(".", 1)[0]
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {db}")
     (
         spark.createDataFrame([], _log_schema())
         .write.format("delta")
@@ -356,7 +363,7 @@ _STDOUT_ERROR_MAX: int = 80
 def _print_line(result: ChildResult, *, display_name: str) -> None:
     """Emit one human-readable log line for a finished child.
 
-    Logged at ``INFO`` to ``spark_az.pipeline_logger`` so users can attach
+    Logged at ``INFO`` to ``spark_az.lgr`` so users can attach
     additional handlers (e.g. ``AzureLogHandler``) without changes here.
 
     Format::
@@ -537,7 +544,7 @@ def _append_rows(table: str, results: List[ChildResult]) -> None:
         results: Rows to append. Empty list is a no-op.
 
     Examples:
-        >>> _append_rows("lab.__pipeline_runlog", [...])
+        >>> _append_rows("_meta.__pipeline_runlog", [...])
     """
     if not results:
         return
@@ -656,7 +663,7 @@ def run_pipeline(
         ...         {"path": "/notebooks/transform"},
         ...         {"path": "/notebooks/load"},
         ...     ],
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="nightly_lab_refresh",
         ... )
 
@@ -664,7 +671,7 @@ def run_pipeline(
 
         >>> results = run_pipeline(
         ...     specs,
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="p",
         ...     fail_fast=False,
         ... )
@@ -802,7 +809,7 @@ class JsonFormatter(logging.Formatter):
 
 
 def set_json_formatter(level: int = logging.INFO) -> None:
-    """Swap the default ``spark_az.pipeline_logger`` handler to :class:`JsonFormatter`.
+    """Swap the default ``spark_az.lgr`` handler to :class:`JsonFormatter`.
 
     Idempotent. Targets only the handler installed by this module
     (identified by name) so other handlers attached by the user — caplog,
@@ -857,7 +864,7 @@ def enable_app_insights(connection_string: str) -> None:
         ) from exc
     configure_azure_monitor(
         connection_string=connection_string,
-        logger_name="spark_az.pipeline_logger",
+        logger_name="spark_az.lgr",
     )
     _APP_INSIGHTS_ENABLED = True
 
@@ -887,7 +894,7 @@ class _StepContext:
 def step(name: str, **attrs: Any) -> Iterator[_StepContext]:
     """Time a logical step and emit structured log records.
 
-    Logs three records to ``spark_az.pipeline_logger``:
+    Logs three records to ``spark_az.lgr``:
 
     - INFO on entry: ``{"step": name, "phase": "start", **attrs}``.
     - INFO on success exit: ``{"step": name, "phase": "ok",
@@ -966,7 +973,7 @@ class PipelineParams(TypedDict, total=False):
     Examples:
         >>> params: PipelineParams = read_pipeline_params(
         ...     pipeline_name="nightly",
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     notebooks=[{"path": "/x"}],
         ... )
     """
@@ -1017,7 +1024,7 @@ def read_pipeline_params(
     Examples:
         >>> params = read_pipeline_params(
         ...     pipeline_name="nightly",
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     notebooks=[
         ...         {"path": "/notebooks/extract"},
         ...         {"path": "/notebooks/load", "timeout_seconds": 3600},

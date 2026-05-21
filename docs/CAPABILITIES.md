@@ -10,7 +10,7 @@
 one orchestrator notebook via `mssparkutils.notebook.run`, captures each
 child's status / duration / exit value / exception, and writes one
 queryable Delta row per child. It is a small library (single
-`pipeline_logger.py` module plus a Spark-session helper) intentionally
+`lgr.py` module plus a Spark-session helper) intentionally
 scoped for the v1 surface. Not a replacement for Synapse pipeline JSON
 authoring, not a parallel orchestrator, not a step-grained event logger.
 
@@ -41,11 +41,11 @@ authoring, not a parallel orchestrator, not a step-grained event logger.
   substring) is recorded as `status="timeout"`; any other exception as
   `status="failed"`. Tracebacks are truncated to 16 KB, messages to 4 KB.
 - **stdlib logging.** Per-child output goes through
-  `logging.getLogger("spark_az.pipeline_logger")` at INFO. Attach an
+  `logging.getLogger("spark_az.lgr")` at INFO. Attach an
   Azure Application Insights handler to fan out without library changes.
 - **Two deployment formats.** An installable wheel
   (`scripts/build.sh`) and a self-contained Synapse notebook
-  (`notebooks/pipeline_logger_inline.ipynb`) that `%run` can pull into
+  (`notebooks/_logging/lgr_inline.ipynb`) that `%run` can pull into
   any other notebook with zero install. The inline notebook is also
   directly runnable as a Synapse pipeline activity (parameters cell at
   the top).
@@ -77,11 +77,11 @@ authoring, not a parallel orchestrator, not a step-grained event logger.
   `pipeline_run_id` parameter; when provided (e.g. from
   `@pipeline().RunId`), uses it instead of generating a UUID. Sets it
   as the active id for `step()` records during the call.
-- **Drop-in starter notebook.** `notebooks/pipeline_starter.ipynb`
+- **Drop-in starter notebook.** `notebooks/_logging/lgr_starter.ipynb`
   bundles JSON logging, optional App Insights, `read_pipeline_params`
   validation, an optional `step()` example, and the `run_pipeline`
   call. Importable into Synapse as a Notebook activity target.
-- **Reference Synapse pipeline JSON.** `synapse/pipeline_template.json`
+- **Reference Synapse pipeline JSON.** `synapse/lgr_starter_pipeline.json`
   is a complete Synapse pipeline definition wiring the starter
   notebook with `@pipeline().RunId` / `@pipeline().Pipeline` and a
   sample `notebooks` array. Importable directly into Synapse Studio.
@@ -93,7 +93,7 @@ authoring, not a parallel orchestrator, not a step-grained event logger.
   The library doesn't manage the connection string itself; the user
   attaches the handler from their notebook.
 - **Inline-notebook drift detection.** The hand-maintained
-  `notebooks/pipeline_logger_inline.py` is in sync with the library as
+  `notebooks/_logging/lgr_inline.py` is in sync with the library as
   of commit `87d8762`. There is no automated check; drift is the
   acceptable tradeoff for the simpler maintenance contract.
 
@@ -152,7 +152,7 @@ attach the command and its real output before quoting a number.
   instead of propagating. Defensible but worth knowing.
 - **Inline-notebook drift.** Hand-maintained; if the library changes
   and someone forgets to copy the new bodies into
-  `notebooks/pipeline_logger_inline.py`, behavior between the two
+  `notebooks/_logging/lgr_inline.py`, behavior between the two
   delivery formats diverges. The maintenance note at the bottom of the
   inline notebook spells out the protocol.
 

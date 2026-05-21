@@ -13,17 +13,17 @@
 # ---
 
 # %% [markdown]
-# # `pipeline_logger_inline`
+# # `lgr_inline`
 #
 # A single self-contained Synapse notebook that bundles the entire
-# `spark_az.pipeline_logger` library. No `pip install spark-az`, no wheel
+# `spark_az.lgr` library. No `pip install spark-az`, no wheel
 # upload to ADLS, no bootstrap dance — drop this notebook into your
 # Synapse workspace and you have a structured pipeline-logging layer
 # available immediately.
 #
 # It's both a library notebook AND a runnable notebook:
 #
-# - **Library mode** — `%run ./pipeline_logger_inline` from any other
+# - **Library mode** — `%run ./lgr_inline` from any other
 #   Synapse notebook. Every public name lands in the caller's scope.
 #   With default parameters (`notebooks=[]`) the run cell at the bottom
 #   is a no-op, so `%run` has zero side effects.
@@ -43,7 +43,7 @@
 # | `ChildSpec` | `TypedDict` describing one child to run: `path` (required), `args`, `timeout_seconds`, `name` (optional). |
 # | `ChildResult` | `TypedDict` describing one row written to the log: status, durations, error class/message/traceback, etc. |
 # | `set_spark(spark)` / `get_spark()` | Register or retrieve the active `SparkSession`. Synapse normally provides one automatically. |
-# | `log` | `logging.Logger` named `spark_az.pipeline_logger`. Attach an `AzureLogHandler` to fan out to Application Insights. |
+# | `log` | `logging.Logger` named `spark_az.lgr`. Attach an `AzureLogHandler` to fan out to Application Insights. |
 #
 # **Status values written to the Delta log:** `"ok"`, `"failed"`,
 # `"timeout"`, `"skipped"`. Every child in your input list always
@@ -56,7 +56,7 @@
 # In a separate Synapse notebook:
 #
 # ```python
-# %run ./pipeline_logger_inline
+# %run ./lgr_inline
 #
 # results = run_pipeline(
 #     [
@@ -64,12 +64,12 @@
 #         {"path": "/notebooks/transform"},
 #         {"path": "/notebooks/load",      "timeout_seconds": 3600},
 #     ],
-#     log_table="lab.__pipeline_runlog",
+#     log_table="_meta.__pipeline_runlog",
 #     pipeline_name="nightly_lab_refresh",
 # )
 #
 # import logging
-# logging.getLogger("spark_az.pipeline_logger").setLevel(logging.INFO)
+# logging.getLogger("spark_az.lgr").setLevel(logging.INFO)
 # ```
 #
 # Query the log later with SQL:
@@ -77,7 +77,7 @@
 # ```sql
 # SELECT pipeline_run_id, child_index, notebook_path, status,
 #        duration_ms / 1000 AS seconds, error_class, error_message
-# FROM   lab.__pipeline_runlog
+# FROM   _meta.__pipeline_runlog
 # WHERE  pipeline_name = 'nightly_lab_refresh'
 # ORDER  BY pipeline_run_id DESC, child_index;
 # ```
@@ -95,7 +95,7 @@
 #     {"path": "/notebooks/transform"},
 #     {"path": "/notebooks/load"}
 #   ],
-#   "log_table": "lab.__pipeline_runlog",
+#   "log_table": "_meta.__pipeline_runlog",
 #   "pipeline_name": "nightly_lab_refresh",
 #   "fail_fast": true
 # }
@@ -120,7 +120,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 notebooks: "List[Dict[str, Any]]" = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 fail_fast: bool = True
 default_timeout_seconds: int = 1800
@@ -158,7 +158,7 @@ _spark: Optional["SparkSession"] = None
 
 
 def set_spark(session: "SparkSession") -> None:
-    """Register the SparkSession used by the inline pipeline_logger.
+    """Register the SparkSession used by the inline lgr.
 
     Use this in local scripts/tests or any runtime where Spark does not
     expose an active session. Synapse notebooks usually do not need it
@@ -210,16 +210,16 @@ def _active_spark_session() -> Optional["SparkSession"]:
 # %% [markdown]
 # ## Logger setup
 #
-# A module-scoped `logging.Logger` named `spark_az.pipeline_logger`.
+# A module-scoped `logging.Logger` named `spark_az.lgr`.
 # Idempotent handler setup with a `propagate=False` so we don't double-log
 # through pytest's root capture during tests. Per-child stdout lines go
 # here via `log.info(...)` — attach an `AzureLogHandler` to fan out to
 # Application Insights without changing any code in this notebook.
 
 # %%
-_HANDLER_NAME: str = "spark_az.pipeline_logger.default"
+_HANDLER_NAME: str = "spark_az.lgr.default"
 
-log: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
+log: logging.Logger = logging.getLogger("spark_az.lgr")
 if not any(h.get_name() == _HANDLER_NAME for h in log.handlers):
     _handler: logging.Handler = logging.StreamHandler()
     _handler.set_name(_HANDLER_NAME)
@@ -380,7 +380,7 @@ def _nbutils() -> Any:
         except ImportError:
             raise RuntimeError(
                 "mssparkutils / notebookutils not importable; "
-                "pipeline_logger_inline must run inside Azure Synapse."
+                "lgr_inline must run inside Azure Synapse."
             )
 
 
@@ -395,7 +395,7 @@ def ensure_log_table(table: str) -> None:
         table: Fully-qualified managed Delta table name.
 
     Examples:
-        >>> ensure_log_table("lab.__pipeline_runlog")
+        >>> ensure_log_table("_meta.__pipeline_runlog")
     """
     spark: Any = get_spark()
     if spark.catalog.tableExists(table):
@@ -474,9 +474,9 @@ def _skipped_result(
 # logger. Output looks like:
 #
 # ```
-# 14:02:11 [INFO] spark_az.pipeline_logger: [14:02:11] [OK]     extract           1.83s  exit=42rows
-# 14:02:13 [INFO] spark_az.pipeline_logger: [14:02:13] [FAIL]   transform         0.42s  ValueError: missing column 'id'
-# 14:02:13 [INFO] spark_az.pipeline_logger: [14:02:13] [SKIP]   load                     (fail_fast)
+# 14:02:11 [INFO] spark_az.lgr: [14:02:11] [OK]     extract           1.83s  exit=42rows
+# 14:02:13 [INFO] spark_az.lgr: [14:02:13] [FAIL]   transform         0.42s  ValueError: missing column 'id'
+# 14:02:13 [INFO] spark_az.lgr: [14:02:13] [SKIP]   load                     (fail_fast)
 # ```
 
 # %%
@@ -496,7 +496,7 @@ _STDOUT_ERROR_MAX: int = 80
 def _print_line(result: ChildResult, *, display_name: str) -> None:
     """Emit one human-readable log line for a finished child.
 
-    Logged at ``INFO`` to ``spark_az.pipeline_logger`` so users can attach
+    Logged at ``INFO`` to ``spark_az.lgr`` so users can attach
     additional handlers (e.g. ``AzureLogHandler``) without changes here.
     """
     badge: str = _STATUS_BADGE.get(result["status"], result["status"].upper())
@@ -854,7 +854,7 @@ if notebooks:
 # ## Maintenance
 #
 # This notebook is **hand-maintained** in sync with the canonical
-# library in `src/spark_az/session.py` and `src/spark_az/pipeline_logger.py`.
+# library in `src/spark_az/session.py` and `src/spark_az/lgr.py`.
 # When the library changes, regenerate this notebook by copying the
 # new bodies in, then run `bash scripts/build_notebooks.sh` to rebuild
 # the `.ipynb` from the `.py`.

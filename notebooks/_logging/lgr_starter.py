@@ -13,7 +13,7 @@
 # ---
 
 # %% [markdown]
-# # `pipeline_starter`
+# # `lgr_starter`
 #
 # A polished, drop-in Synapse notebook that orchestrates a sequence of
 # child notebooks with structured JSON logging, optional Application
@@ -33,7 +33,7 @@
 #
 # This notebook depends on the `spark_az` wheel being installed on the
 # Spark pool. If you can't install workspace packages, use
-# `pipeline_logger_inline.ipynb` instead — same surface, entire library
+# `lgr_inline.ipynb` instead — same surface, entire library
 # inlined.
 
 # %% [markdown]
@@ -44,13 +44,13 @@
 # `pipeline_name`, `pipeline_run_id` (use `@pipeline().RunId`),
 # `fail_fast`, `default_timeout_seconds`, and optionally
 # `app_insights_connection_string`. A reference pipeline JSON is at
-# `synapse/pipeline_template.json` in the repo.
+# `synapse/lgr_starter_pipeline.json` in the repo.
 #
 # **Interactive** (for debugging): edit the parameter cell below, then
 # **Run All**. The `step()` block in the middle is optional.
 #
 # **Library mode**: do not use this notebook in `%run` mode — that's
-# what `pipeline_logger_inline.ipynb` is for. This notebook is meant to
+# what `lgr_inline.ipynb` is for. This notebook is meant to
 # *be* the orchestrator.
 
 # %% [markdown]
@@ -67,7 +67,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 notebooks: "List[Dict[str, Any]]" = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 pipeline_run_id: str = ""
 fail_fast: bool = True
@@ -119,7 +119,7 @@ params = read_pipeline_params(
 )
 
 log.info(
-    "pipeline_starter configured",
+    "lgr_starter configured",
     extra={
         "pipeline_name": params["pipeline_name"],
         "pipeline_run_id": params.get("pipeline_run_id"),
@@ -173,7 +173,7 @@ if params["notebooks"]:
 # SELECT child_index, notebook_path, status,
 #        duration_ms / 1000 AS seconds,
 #        error_class, error_message
-# FROM   lab.__pipeline_runlog
+# FROM   _meta.__pipeline_runlog
 # WHERE  pipeline_run_id = '<paste the run id from the cell output above>'
 # ORDER  BY child_index;
 # ```
@@ -185,7 +185,7 @@ if params["notebooks"]:
 #        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
 #        MIN(started_at) AS run_start,
 #        MAX(finished_at) AS run_end
-# FROM   lab.__pipeline_runlog
+# FROM   _meta.__pipeline_runlog
 # WHERE  pipeline_name = 'nightly_lab_refresh'
 # GROUP  BY pipeline_run_id
 # ORDER  BY run_start DESC

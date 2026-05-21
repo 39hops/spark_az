@@ -14,7 +14,7 @@
 | Log grain | **One row per child notebook invocation** | Coarse but covers the "what happened in this pipeline run?" question without notebook-side changes. |
 | Run identity | **One UUID per `run_pipeline()` call** | No Synapse pipeline JSON contract required in v1. The orchestrator notebook *is* the pipeline. |
 | Sink | **Stdout + Delta table** | Pretty cell output for the human; durable table for replay and dashboards. |
-| Module shape | **Single module** (`src/spark_az/pipeline_logger.py`) | YAGNI. Refactor when it grows past ~400 lines. |
+| Module shape | **Single module** (`src/spark_az/lgr.py`) | YAGNI. Refactor when it grows past ~400 lines. |
 | Source format | **Jupytext "percent" `.py` + generated `.ipynb`** | `.py` is the source of truth, testable with `pytest`. `.ipynb` is the Synapse-deliverable. Both committed. |
 | Write timing | **One batched append per `run_pipeline()` call** | Same trick as `SyncState.upsert_all` in spark_lib — one Delta commit, not N. |
 | Fail-fast | **Default `True`; failed run still writes the log, then re-raises** | The Synapse pipeline activity wrapping the orchestrator needs to see it fail; the log table survives so we can post-mortem. |
@@ -37,19 +37,19 @@ single-activity Synapse pipeline, keeping the JSON layer trivial.
 src/spark_az/
 ├── __init__.py             # re-exports the public surface
 ├── session.py              # get_spark / set_spark (carried from spark_lib)
-└── pipeline_logger.py      # orchestration + Delta logging
+└── lgr.py      # orchestration + Delta logging
 
 notebooks/
-├── pipeline_logger.py      # jupytext "percent" source of truth
-└── pipeline_logger.ipynb   # generated, committed
+├── lgr.py      # jupytext "percent" source of truth
+└── lgr.ipynb   # generated, committed
 
 scripts/
 └── build_notebooks.sh      # jupytext --to ipynb wrapper
 
 tests/
 ├── conftest.py             # mssparkutils stub, local Spark fixture
-├── test_pipeline_logger.py # pure-Python unit tests
-└── test_pipeline_logger_delta.py  # local-Spark schema roundtrip
+├── test_lgr.py # pure-Python unit tests
+└── test_lgr_delta.py  # local-Spark schema roundtrip
 ```
 
 ### Public surface
@@ -202,7 +202,7 @@ def run_pipeline(
         ...         {"path": "/notebooks/transform"},
         ...         {"path": "/notebooks/load"},
         ...     ],
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="nightly_lab_refresh",
         ... )
 
@@ -274,7 +274,7 @@ def ensure_log_table(table: str) -> None:
         table: Fully-qualified managed Delta table name.
 
     Examples:
-        >>> ensure_log_table("lab.__pipeline_runlog")
+        >>> ensure_log_table("_meta.__pipeline_runlog")
     """
 ```
 
@@ -352,8 +352,8 @@ failure — exception identity is not load-bearing.
 
 | Layer | Spark needed? | What it covers |
 | --- | --- | --- |
-| Unit (`test_pipeline_logger.py`) | No | Status mapping, `args_json` serialization, `error_traceback` truncation, `fail_fast` re-raise + log-write order, `ChildResult` shape. `mssparkutils.notebook.run` is stubbed via `conftest.py` to return a value, raise a `RuntimeError`, or raise with `"timeout"` in the message. |
-| Integration (`test_pipeline_logger_delta.py`) | Local Spark + `delta-spark` | `ensure_log_table` is idempotent. Writing a synthetic `ChildResult` list round-trips through the Delta schema unchanged. Catches schema drift. |
+| Unit (`test_lgr.py`) | No | Status mapping, `args_json` serialization, `error_traceback` truncation, `fail_fast` re-raise + log-write order, `ChildResult` shape. `mssparkutils.notebook.run` is stubbed via `conftest.py` to return a value, raise a `RuntimeError`, or raise with `"timeout"` in the message. |
+| Integration (`test_lgr_delta.py`) | Local Spark + `delta-spark` | `ensure_log_table` is idempotent. Writing a synthetic `ChildResult` list round-trips through the Delta schema unchanged. Catches schema drift. |
 | Smoke | Synapse (manual) | Two no-op child notebooks in `notebooks/_smoke/`. Run-on-deploy check, not in CI. |
 
 `conftest.py` carries:
@@ -379,11 +379,11 @@ dev   = ["jupytext"]
 
 ## `.py` → `.ipynb` build
 
-`notebooks/pipeline_logger.py` is authored in jupytext "percent" format:
+`notebooks/_logging/lgr.py` is authored in jupytext "percent" format:
 
 ```python
 # %% [markdown]
-# # pipeline_logger
+# # lgr
 # Orchestrates child notebooks via mssparkutils.notebook.run and writes a
 # Delta log row per child.
 
@@ -391,12 +391,12 @@ dev   = ["jupytext"]
 from typing import Any, Dict, List
 
 notebooks: List[Dict[str, Any]] = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 fail_fast: bool = True
 
 # %%
-from spark_az.pipeline_logger import run_pipeline
+from spark_az.lgr import run_pipeline
 
 run_pipeline(
     notebooks,
@@ -425,13 +425,13 @@ parametrizable from a Synapse pipeline activity or a local test driver.
 | --- | --- |
 | `src/spark_az/__init__.py` | Re-export `run_pipeline`, `run_child`, `ChildSpec`, `ChildResult`, `ensure_log_table`, `get_spark`, `set_spark`. |
 | `src/spark_az/session.py` | `get_spark` / `set_spark` ported from spark_lib. |
-| `src/spark_az/pipeline_logger.py` | `LOG_SCHEMA`, `ChildSpec`, `ChildResult`, `ensure_log_table`, `run_child`, `run_pipeline`, `_print_line`, `_append_rows`, `_skipped_result`, `_truncate`, `_nbutils`. |
-| `notebooks/pipeline_logger.py` | Jupytext-format orchestrator notebook. |
-| `notebooks/pipeline_logger.ipynb` | Generated; checked in. |
+| `src/spark_az/lgr.py` | `LOG_SCHEMA`, `ChildSpec`, `ChildResult`, `ensure_log_table`, `run_child`, `run_pipeline`, `_print_line`, `_append_rows`, `_skipped_result`, `_truncate`, `_nbutils`. |
+| `notebooks/_logging/lgr.py` | Jupytext-format orchestrator notebook. |
+| `notebooks/_logging/lgr.ipynb` | Generated; checked in. |
 | `scripts/build_notebooks.sh` | Wraps `jupytext --to ipynb`. |
 | `tests/conftest.py` | `fake_mssparkutils` fixture; local `SparkSession` fixture (delta-spark configured). |
-| `tests/test_pipeline_logger.py` | Pure-Python unit tests. |
-| `tests/test_pipeline_logger_delta.py` | Local-Spark schema roundtrip. |
+| `tests/test_lgr.py` | Pure-Python unit tests. |
+| `tests/test_lgr_delta.py` | Local-Spark schema roundtrip. |
 | `pyproject.toml` | `dependencies = []`; `[project.optional-dependencies]` for `spark` / `test` / `dev`; `[tool.pytest.ini_options]` and packages-find as in spark_lib. |
 
 ## Scope boundary

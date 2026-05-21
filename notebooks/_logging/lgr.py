@@ -13,7 +13,7 @@
 # ---
 
 # %% [markdown]
-# # pipeline_logger
+# # lgr
 #
 # Orchestrates child Synapse notebooks via mssparkutils.notebook.run and
 # writes a Delta log row per child. Invoke from a Synapse pipeline
@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 notebooks: List[Dict[str, Any]] = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 fail_fast: bool = True
 default_timeout_seconds: int = 1800
