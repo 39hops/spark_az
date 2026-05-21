@@ -1,0 +1,70 @@
+{
+  "name": "spark_az_starter_pipeline",
+  "properties": {
+    "description": "Drives notebooks/pipeline_starter.ipynb with the spark_az parameter contract. Import into Synapse Studio, set the referenceName below to whatever you named the imported pipeline_starter notebook, then customise the 'notebooks' parameter default.",
+    "activities": [
+      {
+        "name": "run_starter",
+        "type": "SynapseNotebook",
+        "dependsOn": [],
+        "policy": {
+          "timeout": "1.00:00:00",
+          "retry": 0,
+          "retryIntervalInSeconds": 30,
+          "secureOutput": false,
+          "secureInput": false
+        },
+        "userProperties": [],
+        "typeProperties": {
+          "notebook": {
+            "referenceName": "pipeline_starter",
+            "type": "NotebookReference"
+          },
+          "parameters": {
+            "pipeline_run_id": {
+              "value": {
+                "value": "@pipeline().RunId",
+                "type": "Expression"
+              },
+              "type": "string"
+            },
+            "pipeline_name": {
+              "value": {
+                "value": "@pipeline().Pipeline",
+                "type": "Expression"
+              },
+              "type": "string"
+            },
+            "log_table": {
+              "value": "lab.__pipeline_runlog",
+              "type": "string"
+            },
+            "fail_fast": {
+              "value": true,
+              "type": "bool"
+            },
+            "default_timeout_seconds": {
+              "value": 1800,
+              "type": "int"
+            },
+            "notebooks": {
+              "value": [
+                {"path": "Shared/etl/extract"},
+                {"path": "Shared/etl/transform"},
+                {"path": "Shared/etl/load", "timeout_seconds": 3600}
+              ],
+              "type": "array"
+            },
+            "app_insights_connection_string": {
+              "value": "",
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "annotations": [
+      "spark_az"
+    ]
+  }
+}

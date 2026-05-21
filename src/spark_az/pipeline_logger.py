@@ -8,18 +8,27 @@ Public API
 ----------
 - :class:`ChildSpec` — describes one child notebook to run.
 - :class:`ChildResult` — describes one row written to the log table.
+- :class:`PipelineParams` — validated Synapse-passed parameter bag.
 - :func:`ensure_log_table` — idempotent log-table creation.
+- :func:`read_pipeline_params` — validate + build a ``PipelineParams``.
 - :func:`run_child` — run one child; never raises.
 - :func:`run_pipeline` — run many in sequence with batched logging.
+- :func:`step` — context manager for in-orchestrator structured timing.
+- :class:`JsonFormatter` + :func:`set_json_formatter` — opt-in JSON
+  log lines on stdout.
+- :func:`enable_app_insights` — opt-in Azure App Insights / Log
+  Analytics fan-out via ``azure-monitor-opentelemetry``.
+- :func:`set_active_run_id` / :func:`get_active_run_id` — module
+  singleton consulted by ``step`` and set automatically by
+  ``run_pipeline``.
 
 Conventions
 -----------
 - The log table is a managed Delta table (e.g. ``"lab.__pipeline_runlog"``).
 - Per-child output goes through ``logging.Logger`` ``spark_az.pipeline_logger``
-  at ``INFO``; attach an ``AzureLogHandler`` to fan out to Application
-  Insights without touching this module.
-- ``mssparkutils.notebook.run`` is blocking; orchestration is sequential
-  in v1.
+  at ``INFO``; attach an ``AzureLogHandler`` (or call
+  :func:`enable_app_insights`) to fan out without touching this module.
+- ``mssparkutils.notebook.run`` is blocking; orchestration is sequential.
 """
 from __future__ import annotations
 

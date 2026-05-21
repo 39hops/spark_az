@@ -10,9 +10,31 @@ one structured Delta row per child to a managed log table.
 Style and conventions mirror the companion library
 [`github.com/39hops/spark_lib`](https://github.com/39hops/spark_lib).
 
-## Two ways to use it
+## Three ways to use it
 
-### 1. Zero-install — `%run` the inline notebook (recommended for first use)
+### 1. Drop-in starter notebook — recommended for any new Synapse pipeline
+
+Upload `notebooks/pipeline_starter.ipynb` to your workspace, attach a
+Synapse Pipeline Notebook activity to it, and pass the parameters from
+the activity:
+
+| Parameter | Value | Notes |
+| --- | --- | --- |
+| `pipeline_run_id` | `@pipeline().RunId` | Synapse-injected; ties Delta rows to the pipeline run. |
+| `pipeline_name` | `@pipeline().Pipeline` | Stamped on every row. |
+| `log_table` | `lab.__pipeline_runlog` | Managed Delta table. Created on first run. |
+| `notebooks` | `[{"path": "...", "args": {...}}, ...]` | List of children to orchestrate. |
+| `fail_fast` | `true` (default) | Re-raises after writing the log on first failure. |
+| `default_timeout_seconds` | `1800` | Per-child default; override per-spec via `timeout_seconds`. |
+| `app_insights_connection_string` | `""` (default) | If set, fans logs out to App Insights. |
+
+A ready-to-import reference is at `synapse/pipeline_template.json`.
+
+The starter ships JSON-structured logging by default and an optional
+`step()` helper you can use for in-orchestrator work. Edit the
+parameter cell directly to run interactively.
+
+### 2. Zero-install — `%run` the inline notebook
 
 Upload `notebooks/pipeline_logger_inline.ipynb` to your Synapse workspace,
 then from any other notebook:
@@ -38,7 +60,7 @@ scope. The same notebook also works as a Synapse pipeline notebook
 activity: set the `notebooks` / `log_table` / `pipeline_name` parameters
 from the activity, run all cells.
 
-### 2. Install the wheel — for repeat use across many notebooks
+### 3. Install the wheel — for repeat use across many notebooks
 
 ```sh
 scripts/build.sh                # builds dist/spark_az-0.1.0-py3-none-any.whl
@@ -84,20 +106,44 @@ ORDER  BY pipeline_run_id DESC, child_index;
 - `fail_fast=False`: every child runs, failures are captured as rows,
   the call returns normally and the caller decides what to do.
 
-## App Insights
+## JSON logging + App Insights
 
-`pipeline_logger.log` is a stdlib `logging.Logger`. Bolt on an Azure
-handler at notebook top to fan out:
+Call `set_json_formatter()` at the top of any notebook to switch the
+default stdout output to one JSON object per record:
 
-```python
-import logging
-from azure.monitor.opentelemetry.exporter import AzureMonitorLogExporter
-logging.getLogger("spark_az.pipeline_logger").addHandler(
-    AzureMonitorLogExporter.from_connection_string("...")
-)
+```json
+{"ts": "2026-05-21T14:02:11+00:00", "level": "INFO", "logger": "spark_az.pipeline_logger", "msg": "[OK] extract 1.83s", "pipeline_run_id": "...", "step": "extract", "duration_ms": 1830}
 ```
 
-No code change in the library.
+Synapse captures stdout into driver logs and forwards to any attached
+handler. For App Insights, one-line opt-in:
+
+```python
+from spark_az import enable_app_insights
+enable_app_insights("InstrumentationKey=...;IngestionEndpoint=...")
+```
+
+Requires the optional `azure-monitor-opentelemetry` package
+(`pip install azure-monitor-opentelemetry`). Without it,
+`enable_app_insights` raises an `ImportError` with install instructions.
+
+## Per-step timing inside the orchestrator
+
+```python
+from spark_az import step
+
+with step("preflight", pipeline="nightly") as s:
+    rows = source_count()
+    s.metric("rows_seen", rows)
+
+with step("aggregate"):
+    publish_summary()
+```
+
+`step()` emits three structured log records (start, ok-or-failed,
+end) with the active `pipeline_run_id` attached so they join cleanly
+with the per-child rows in the Delta log table. v2 keeps step records
+in stdout only; persisting them to a separate Delta table is a v3.
 
 ## Local development
 
@@ -126,8 +172,12 @@ src/spark_az/
 └── pipeline_logger.py      # ChildSpec / ChildResult / run_child / run_pipeline / ensure_log_table
 
 notebooks/
+├── pipeline_starter.{py,ipynb}         # polished drop-in: params, JSON logging, App Insights, step()
 ├── pipeline_logger.{py,ipynb}          # thin wrapper, imports installed library
 └── pipeline_logger_inline.{py,ipynb}   # entire library inline — %run-able with zero install
+
+synapse/
+└── pipeline_template.json              # reference Synapse pipeline JSON wiring pipeline_starter
 
 scripts/
 ├── setup.sh                # editable install of test+dev extras
