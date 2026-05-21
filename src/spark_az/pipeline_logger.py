@@ -58,7 +58,13 @@ LOG_SCHEMA_FIELDS: List[Tuple[str, str]] = [
 ]
 
 
-class ChildSpec(TypedDict, total=False):
+class _ChildSpecRequired(TypedDict):
+    """Required fields of :class:`ChildSpec`. Internal helper."""
+
+    path: str
+
+
+class ChildSpec(_ChildSpecRequired, total=False):
     """One child notebook to run.
 
     Fields:
@@ -78,7 +84,6 @@ class ChildSpec(TypedDict, total=False):
         ... }
     """
 
-    path: str
     timeout_seconds: int
     args: Dict[str, Any]
     name: str
