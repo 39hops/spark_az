@@ -2,4 +2,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-python -m build --wheel
+jupytext --to ipynb notebooks/*.py
