@@ -466,3 +466,39 @@ def test_run_pipeline_fail_fast_writes_log_before_raising(
     assert [r["status"] for r in rows] == ["ok", "failed", "skipped"]
     assert rows[1]["error_class"] == "ValueError"
     assert rows[2]["notebook_path"] == "/notebooks/x3"
+
+
+def test_run_pipeline_fail_fast_false_runs_everything(
+    fake_mssparkutils: Any,
+) -> None:
+    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+
+    def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
+        if path == "/notebooks/middle":
+            raise ValueError("bad")
+        return "ok"
+
+    fake_mssparkutils.notebook.handler = handler
+    specs: List[ChildSpec] = [
+        {"path": "/notebooks/first"},
+        {"path": "/notebooks/middle"},
+        {"path": "/notebooks/last"},
+    ]
+
+    results = run_pipeline(
+        specs,
+        log_table="ignored",
+        pipeline_name="p",
+        write_log=False,
+        fail_fast=False,
+    )
+
+    assert [r["status"] for r in results] == ["ok", "failed", "ok"]
+    paths_called: List[str] = [
+        c["path"] for c in fake_mssparkutils.notebook.calls
+    ]
+    assert paths_called == [
+        "/notebooks/first",
+        "/notebooks/middle",
+        "/notebooks/last",
+    ]
