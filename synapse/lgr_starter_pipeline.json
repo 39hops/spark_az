@@ -36,7 +36,7 @@
               "type": "string"
             },
             "log_table": {
-              "value": "lab.__pipeline_runlog",
+              "value": "_meta.__pipeline_runlog",
               "type": "string"
             },
             "fail_fast": {

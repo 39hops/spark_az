@@ -82,7 +82,7 @@ class PipelineParams(TypedDict, total=False):
     """Standard Synapse pipeline parameters consumed by the starter notebook."""
     pipeline_run_id: str       # @pipeline().RunId, optional override
     pipeline_name: str         # @pipeline().Pipeline
-    log_table: str             # e.g. lab.__pipeline_runlog
+    log_table: str             # e.g. _meta.__pipeline_runlog
     fail_fast: bool
     default_timeout_seconds: int
     notebooks: List[Dict[str, Any]]
@@ -148,7 +148,7 @@ Structure:
           "parameters": {
             "pipeline_run_id":          {"value": "@pipeline().RunId", "type": "string"},
             "pipeline_name":            {"value": "@pipeline().Pipeline", "type": "string"},
-            "log_table":                {"value": "lab.__pipeline_runlog", "type": "string"},
+            "log_table":                {"value": "_meta.__pipeline_runlog", "type": "string"},
             "notebooks":                {"value": "...", "type": "array"},
             "fail_fast":                {"value": "true", "type": "bool"},
             "default_timeout_seconds":  {"value": "1800", "type": "int"},

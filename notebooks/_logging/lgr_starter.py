@@ -67,7 +67,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 notebooks: "List[Dict[str, Any]]" = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 pipeline_run_id: str = ""
 fail_fast: bool = True
@@ -173,7 +173,7 @@ if params["notebooks"]:
 # SELECT child_index, notebook_path, status,
 #        duration_ms / 1000 AS seconds,
 #        error_class, error_message
-# FROM   lab.__pipeline_runlog
+# FROM   _meta.__pipeline_runlog
 # WHERE  pipeline_run_id = '<paste the run id from the cell output above>'
 # ORDER  BY child_index;
 # ```
@@ -185,7 +185,7 @@ if params["notebooks"]:
 #        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
 #        MIN(started_at) AS run_start,
 #        MAX(finished_at) AS run_end
-# FROM   lab.__pipeline_runlog
+# FROM   _meta.__pipeline_runlog
 # WHERE  pipeline_name = 'nightly_lab_refresh'
 # GROUP  BY pipeline_run_id
 # ORDER  BY run_start DESC

@@ -22,7 +22,7 @@ the activity:
 | --- | --- | --- |
 | `pipeline_run_id` | `@pipeline().RunId` | Synapse-injected; ties Delta rows to the pipeline run. |
 | `pipeline_name` | `@pipeline().Pipeline` | Stamped on every row. |
-| `log_table` | `lab.__pipeline_runlog` | Managed Delta table. Created on first run. |
+| `log_table` | `_meta.__pipeline_runlog` | Managed Delta table. Created on first run. |
 | `notebooks` | `[{"path": "...", "args": {...}}, ...]` | List of children to orchestrate. |
 | `fail_fast` | `true` (default) | Re-raises after writing the log on first failure. |
 | `default_timeout_seconds` | `1800` | Per-child default; override per-spec via `timeout_seconds`. |
@@ -48,7 +48,7 @@ results = run_pipeline(
         {"path": "Shared/etl/transform"},
         {"path": "Shared/etl/load",      "timeout_seconds": 3600},
     ],
-    log_table="lab.__pipeline_runlog",
+    log_table="_meta.__pipeline_runlog",
     pipeline_name="nightly_lab_refresh",
 )
 ```
@@ -72,7 +72,7 @@ Synapse Spark pool, then in any notebook on that pool:
 ```python
 from spark_az import run_pipeline, ChildSpec
 
-results = run_pipeline([...], log_table="lab.__pipeline_runlog", pipeline_name="...")
+results = run_pipeline([...], log_table="_meta.__pipeline_runlog", pipeline_name="...")
 ```
 
 Use `notebooks/_logging/lgr.ipynb` (the thin orchestrator) the same
@@ -91,7 +91,7 @@ Columns: `pipeline_run_id`, `pipeline_name`, `child_index`,
 ```sql
 SELECT pipeline_run_id, child_index, notebook_path, status,
        duration_ms / 1000 AS seconds, error_class, error_message
-FROM   lab.__pipeline_runlog
+FROM   _meta.__pipeline_runlog
 WHERE  pipeline_name = 'nightly_lab_refresh'
 ORDER  BY pipeline_run_id DESC, child_index;
 ```

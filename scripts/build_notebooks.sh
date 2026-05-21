@@ -2,4 +2,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-jupytext --to ipynb notebooks/*.py
+find notebooks -name '*.py' -print0 | xargs -0 jupytext --to ipynb

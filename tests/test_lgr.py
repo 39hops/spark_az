@@ -660,13 +660,13 @@ def test_read_pipeline_params_happy_path() -> None:
 
     params = read_pipeline_params(
         pipeline_name="nightly",
-        log_table="lab.__pipeline_runlog",
+        log_table="_meta.__pipeline_runlog",
         notebooks=[{"path": "/x"}, {"path": "/y", "args": {"d": 1}}],
         pipeline_run_id="r-1",
         extras={"job_id": "j-7"},
     )
     assert params["pipeline_name"] == "nightly"
-    assert params["log_table"] == "lab.__pipeline_runlog"
+    assert params["log_table"] == "_meta.__pipeline_runlog"
     assert params["notebooks"] == [{"path": "/x"}, {"path": "/y", "args": {"d": 1}}]
     assert params["pipeline_run_id"] == "r-1"
     assert params["extras"] == {"job_id": "j-7"}

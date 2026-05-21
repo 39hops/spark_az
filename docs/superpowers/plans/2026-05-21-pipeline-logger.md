@@ -418,7 +418,7 @@ Public API
 
 Conventions
 -----------
-- The log table is a managed Delta table (e.g. ``"lab.__pipeline_runlog"``).
+- The log table is a managed Delta table (e.g. ``"_meta.__pipeline_runlog"``).
 - Stdout is plain ``print()`` — audience is the Synapse cell output.
 - ``mssparkutils.notebook.run`` is blocking; orchestration is sequential
   in v1.
@@ -944,7 +944,7 @@ def ensure_log_table(table: str) -> None:
         table: Fully-qualified managed Delta table name.
 
     Examples:
-        >>> ensure_log_table("lab.__pipeline_runlog")
+        >>> ensure_log_table("_meta.__pipeline_runlog")
     """
     spark: Any = get_spark()
     if spark.catalog.tableExists(table):
@@ -1675,7 +1675,7 @@ def _append_rows(table: str, results: List[ChildResult]) -> None:
         results: Rows to append. Empty list is a no-op.
 
     Examples:
-        >>> _append_rows("lab.__pipeline_runlog", [...])
+        >>> _append_rows("_meta.__pipeline_runlog", [...])
     """
     if not results:
         return
@@ -1870,7 +1870,7 @@ def run_pipeline(
         ...         {"path": "/notebooks/transform"},
         ...         {"path": "/notebooks/load"},
         ...     ],
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="nightly_lab_refresh",
         ... )
 
@@ -1878,7 +1878,7 @@ def run_pipeline(
 
         >>> results = run_pipeline(
         ...     specs,
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="p",
         ...     fail_fast=False,
         ... )
@@ -2211,7 +2211,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 notebooks: List[Dict[str, Any]] = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 fail_fast: bool = True
 default_timeout_seconds: int = 1800

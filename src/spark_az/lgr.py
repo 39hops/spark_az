@@ -24,7 +24,7 @@ Public API
 
 Conventions
 -----------
-- The log table is a managed Delta table (e.g. ``"lab.__pipeline_runlog"``).
+- The log table is a managed Delta table (e.g. ``"_meta.__pipeline_runlog"``).
 - Per-child output goes through ``logging.Logger`` ``spark_az.lgr``
   at ``INFO``; attach an ``AzureLogHandler`` (or call
   :func:`enable_app_insights`) to fan out without touching this module.
@@ -239,21 +239,28 @@ def _nbutils() -> Any:
 
 
 def ensure_log_table(table: str) -> None:
-    """Create the log Delta table if it does not exist.
+    """Create the log Delta table (and its database) if missing.
 
     Idempotent. Mirrors :meth:`SyncState.ensure` in spark_lib: checks
-    ``spark.catalog.tableExists(table)``; otherwise writes an empty
-    DataFrame with :func:`_log_schema` as a managed Delta table.
+    ``spark.catalog.tableExists(table)``; otherwise runs
+    ``CREATE DATABASE IF NOT EXISTS <db>`` for any database prefix on
+    ``table`` then writes an empty DataFrame with :func:`_log_schema`
+    as a managed Delta table.
 
     Args:
-        table: Fully-qualified managed Delta table name.
+        table: Fully-qualified managed Delta table name
+            (e.g. ``"_meta.__pipeline_runlog"``). A bare table name
+            without a database prefix is also accepted.
 
     Examples:
-        >>> ensure_log_table("lab.__pipeline_runlog")
+        >>> ensure_log_table("_meta.__pipeline_runlog")
     """
     spark: Any = get_spark()
     if spark.catalog.tableExists(table):
         return
+    if "." in table:
+        db: str = table.split(".", 1)[0]
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {db}")
     (
         spark.createDataFrame([], _log_schema())
         .write.format("delta")
@@ -537,7 +544,7 @@ def _append_rows(table: str, results: List[ChildResult]) -> None:
         results: Rows to append. Empty list is a no-op.
 
     Examples:
-        >>> _append_rows("lab.__pipeline_runlog", [...])
+        >>> _append_rows("_meta.__pipeline_runlog", [...])
     """
     if not results:
         return
@@ -656,7 +663,7 @@ def run_pipeline(
         ...         {"path": "/notebooks/transform"},
         ...         {"path": "/notebooks/load"},
         ...     ],
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="nightly_lab_refresh",
         ... )
 
@@ -664,7 +671,7 @@ def run_pipeline(
 
         >>> results = run_pipeline(
         ...     specs,
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="p",
         ...     fail_fast=False,
         ... )
@@ -966,7 +973,7 @@ class PipelineParams(TypedDict, total=False):
     Examples:
         >>> params: PipelineParams = read_pipeline_params(
         ...     pipeline_name="nightly",
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     notebooks=[{"path": "/x"}],
         ... )
     """
@@ -1017,7 +1024,7 @@ def read_pipeline_params(
     Examples:
         >>> params = read_pipeline_params(
         ...     pipeline_name="nightly",
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     notebooks=[
         ...         {"path": "/notebooks/extract"},
         ...         {"path": "/notebooks/load", "timeout_seconds": 3600},

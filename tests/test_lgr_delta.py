@@ -36,6 +36,20 @@ def test_ensure_log_table_is_idempotent(spark: Any) -> None:
     assert spark.table(table).count() == 0
 
 
+def test_ensure_log_table_creates_missing_database(spark: Any) -> None:
+    from spark_az.lgr import ensure_log_table
+
+    db: str = "_lgr_test_meta"
+    table: str = f"{db}.runlog_smoke"
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    spark.sql(f"DROP DATABASE IF EXISTS {db} CASCADE")
+
+    ensure_log_table(table)
+
+    assert spark.catalog.tableExists(table)
+    assert spark.catalog.databaseExists(db)
+
+
 def test_append_rows_writes_all_columns_and_audited_at(spark: Any) -> None:
     from spark_az.lgr import (
         LOG_SCHEMA_FIELDS,

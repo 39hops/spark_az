@@ -202,7 +202,7 @@ def run_pipeline(
         ...         {"path": "/notebooks/transform"},
         ...         {"path": "/notebooks/load"},
         ...     ],
-        ...     log_table="lab.__pipeline_runlog",
+        ...     log_table="_meta.__pipeline_runlog",
         ...     pipeline_name="nightly_lab_refresh",
         ... )
 
@@ -274,7 +274,7 @@ def ensure_log_table(table: str) -> None:
         table: Fully-qualified managed Delta table name.
 
     Examples:
-        >>> ensure_log_table("lab.__pipeline_runlog")
+        >>> ensure_log_table("_meta.__pipeline_runlog")
     """
 ```
 
@@ -391,7 +391,7 @@ dev   = ["jupytext"]
 from typing import Any, Dict, List
 
 notebooks: List[Dict[str, Any]] = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 fail_fast: bool = True
 

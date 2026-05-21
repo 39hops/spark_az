@@ -64,7 +64,7 @@
 #         {"path": "/notebooks/transform"},
 #         {"path": "/notebooks/load",      "timeout_seconds": 3600},
 #     ],
-#     log_table="lab.__pipeline_runlog",
+#     log_table="_meta.__pipeline_runlog",
 #     pipeline_name="nightly_lab_refresh",
 # )
 #
@@ -77,7 +77,7 @@
 # ```sql
 # SELECT pipeline_run_id, child_index, notebook_path, status,
 #        duration_ms / 1000 AS seconds, error_class, error_message
-# FROM   lab.__pipeline_runlog
+# FROM   _meta.__pipeline_runlog
 # WHERE  pipeline_name = 'nightly_lab_refresh'
 # ORDER  BY pipeline_run_id DESC, child_index;
 # ```
@@ -95,7 +95,7 @@
 #     {"path": "/notebooks/transform"},
 #     {"path": "/notebooks/load"}
 #   ],
-#   "log_table": "lab.__pipeline_runlog",
+#   "log_table": "_meta.__pipeline_runlog",
 #   "pipeline_name": "nightly_lab_refresh",
 #   "fail_fast": true
 # }
@@ -120,7 +120,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 notebooks: "List[Dict[str, Any]]" = []
-log_table: str = "lab.__pipeline_runlog"
+log_table: str = "_meta.__pipeline_runlog"
 pipeline_name: str = ""
 fail_fast: bool = True
 default_timeout_seconds: int = 1800
@@ -395,7 +395,7 @@ def ensure_log_table(table: str) -> None:
         table: Fully-qualified managed Delta table name.
 
     Examples:
-        >>> ensure_log_table("lab.__pipeline_runlog")
+        >>> ensure_log_table("_meta.__pipeline_runlog")
     """
     spark: Any = get_spark()
     if spark.catalog.tableExists(table):
