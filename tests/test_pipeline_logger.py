@@ -398,3 +398,71 @@ def test_run_pipeline_outside_synapse_raises_before_loop(
             pipeline_name="p",
             write_log=False,
         )
+
+
+def test_run_pipeline_fail_fast_skips_remaining_and_raises(
+    fake_mssparkutils: Any,
+) -> None:
+    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+
+    def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
+        if path == "/notebooks/transform":
+            raise ValueError("bad data")
+        return "ok"
+
+    fake_mssparkutils.notebook.handler = handler
+    specs: List[ChildSpec] = [
+        {"path": "/notebooks/extract"},
+        {"path": "/notebooks/transform"},
+        {"path": "/notebooks/load"},
+    ]
+
+    with pytest.raises(RuntimeError, match="ValueError: bad data"):
+        run_pipeline(
+            specs,
+            log_table="ignored",
+            pipeline_name="nightly",
+            write_log=False,
+            fail_fast=True,
+        )
+
+    paths_called: List[str] = [
+        c["path"] for c in fake_mssparkutils.notebook.calls
+    ]
+    assert paths_called == ["/notebooks/extract", "/notebooks/transform"]
+
+
+def test_run_pipeline_fail_fast_writes_log_before_raising(
+    fake_mssparkutils: Any, registered_spark: Any
+) -> None:
+    """The Delta log must be durable even on fail_fast re-raise."""
+    from spark_az.pipeline_logger import ChildSpec, run_pipeline
+
+    spark: Any = registered_spark
+    table: str = "default.test_runpipeline_failfast"
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+    def handler(path: str, t: int, args: Dict[str, Any]) -> Any:
+        if path == "/notebooks/x2":
+            raise ValueError("nope")
+        return "ok"
+
+    fake_mssparkutils.notebook.handler = handler
+    specs: List[ChildSpec] = [
+        {"path": "/notebooks/x1"},
+        {"path": "/notebooks/x2"},
+        {"path": "/notebooks/x3"},
+    ]
+
+    with pytest.raises(RuntimeError):
+        run_pipeline(
+            specs,
+            log_table=table,
+            pipeline_name="p",
+            fail_fast=True,
+        )
+
+    rows = spark.table(table).orderBy("child_index").collect()
+    assert [r["status"] for r in rows] == ["ok", "failed", "skipped"]
+    assert rows[1]["error_class"] == "ValueError"
+    assert rows[2]["notebook_path"] == "/notebooks/x3"
