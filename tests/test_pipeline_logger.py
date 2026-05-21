@@ -277,3 +277,75 @@ def test_run_child_uses_default_timeout(fake_mssparkutils: Any) -> None:
     )
 
     assert fake_mssparkutils.notebook.calls[0]["timeout"] == 900
+
+
+def test_run_child_failure_captures_traceback(fake_mssparkutils: Any) -> None:
+    """run_child must record status=failed and capture error details on exception."""
+    from spark_az.pipeline_logger import ChildSpec, run_child
+
+    def boom(path: str, timeout: int, args: Dict[str, Any]) -> Any:
+        raise ValueError("missing column 'id'")
+
+    fake_mssparkutils.notebook.handler = boom
+    spec: ChildSpec = {"path": "/notebooks/transform"}
+
+    result = run_child(
+        spec,
+        pipeline_run_id="r",
+        pipeline_name="p",
+        child_index=1,
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_class"] == "ValueError"
+    assert "missing column" in result["error_message"]
+    assert "ValueError" in result["error_traceback"]
+    assert result["exit_value"] == ""
+
+
+def test_run_child_timeout_routes_to_timeout_status(
+    fake_mssparkutils: Any,
+) -> None:
+    """run_child must set status=timeout when the notebook raises a timeout RuntimeError."""
+    from spark_az.pipeline_logger import ChildSpec, run_child
+
+    def slow(path: str, timeout: int, args: Dict[str, Any]) -> Any:
+        raise RuntimeError("notebook timed out after 1800 seconds")
+
+    fake_mssparkutils.notebook.handler = slow
+    spec: ChildSpec = {"path": "/notebooks/load"}
+
+    result = run_child(
+        spec,
+        pipeline_run_id="r",
+        pipeline_name="p",
+        child_index=2,
+    )
+
+    assert result["status"] == "timeout"
+    assert result["error_class"] == "RuntimeError"
+    assert "timed out" in result["error_message"]
+
+
+def test_run_child_truncates_giant_traceback(
+    fake_mssparkutils: Any,
+) -> None:
+    """run_child must truncate oversized error_message and error_traceback fields."""
+    from spark_az.pipeline_logger import ChildSpec, run_child
+
+    def boom(path: str, timeout: int, args: Dict[str, Any]) -> Any:
+        raise RuntimeError("x" * 50000)
+
+    fake_mssparkutils.notebook.handler = boom
+    spec: ChildSpec = {"path": "/notebooks/x"}
+
+    result = run_child(
+        spec,
+        pipeline_run_id="r",
+        pipeline_name="p",
+        child_index=0,
+    )
+
+    assert result["error_message"].endswith("…[truncated]")
+    assert len(result["error_message"]) <= 4096 + len("…[truncated]")
+    assert result["error_traceback"].endswith("…[truncated]")
