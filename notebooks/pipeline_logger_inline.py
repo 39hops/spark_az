@@ -13,45 +13,128 @@
 # ---
 
 # %% [markdown]
-# # pipeline_logger_inline
+# # `pipeline_logger_inline`
 #
-# Self-contained version of `spark_az.pipeline_logger`. The entire
-# library lives in this notebook so it can be loaded via `%run` from
-# any Synapse notebook without installing the `spark-az` wheel.
+# A single self-contained Synapse notebook that bundles the entire
+# `spark_az.pipeline_logger` library. No `pip install spark-az`, no wheel
+# upload to ADLS, no bootstrap dance — drop this notebook into your
+# Synapse workspace and you have a structured pipeline-logging layer
+# available immediately.
 #
-# **Usage from another Synapse notebook:**
+# It's both a library notebook AND a runnable notebook:
+#
+# - **Library mode** — `%run ./pipeline_logger_inline` from any other
+#   Synapse notebook. Every public name lands in the caller's scope.
+#   With default parameters (`notebooks=[]`) the run cell at the bottom
+#   is a no-op, so `%run` has zero side effects.
+# - **Run mode** — set the parameter cell from a Synapse pipeline
+#   notebook activity (or by editing in place), run all cells. The
+#   bottom cell calls `run_pipeline(...)` and writes one Delta row per
+#   child notebook executed.
+
+# %% [markdown]
+# ## What this notebook gives you
+#
+# | Symbol | Purpose |
+# | --- | --- |
+# | `run_pipeline(children, *, log_table, pipeline_name, …)` | Sequentially run a list of child notebooks via `mssparkutils.notebook.run`, capture exit values and exceptions, write one Delta row per child, and re-raise on first failure (unless `fail_fast=False`). |
+# | `run_child(spec, *, pipeline_run_id, pipeline_name, child_index, …)` | Run a single child notebook. Never raises — returns a `ChildResult`. |
+# | `ensure_log_table(table)` | Idempotently create the Delta log table with the canonical schema. |
+# | `ChildSpec` | `TypedDict` describing one child to run: `path` (required), `args`, `timeout_seconds`, `name` (optional). |
+# | `ChildResult` | `TypedDict` describing one row written to the log: status, durations, error class/message/traceback, etc. |
+# | `set_spark(spark)` / `get_spark()` | Register or retrieve the active `SparkSession`. Synapse normally provides one automatically. |
+# | `log` | `logging.Logger` named `spark_az.pipeline_logger`. Attach an `AzureLogHandler` to fan out to Application Insights. |
+#
+# **Status values written to the Delta log:** `"ok"`, `"failed"`,
+# `"timeout"`, `"skipped"`. Every child in your input list always
+# produces a row — the table by itself answers "what was supposed to
+# run, what ran, what didn't."
+
+# %% [markdown]
+# ## Example — library mode
+#
+# In a separate Synapse notebook:
 #
 # ```python
 # %run ./pipeline_logger_inline
 #
 # results = run_pipeline(
 #     [
-#         {"path": "/notebooks/extract", "args": {"date": "2026-05-21"}},
+#         {"path": "/notebooks/extract",   "args": {"date": "2026-05-21"}},
 #         {"path": "/notebooks/transform"},
-#         {"path": "/notebooks/load"},
+#         {"path": "/notebooks/load",      "timeout_seconds": 3600},
 #     ],
 #     log_table="lab.__pipeline_runlog",
 #     pipeline_name="nightly_lab_refresh",
 # )
+#
+# import logging
+# logging.getLogger("spark_az.pipeline_logger").setLevel(logging.INFO)
 # ```
 #
-# After `%run`, every name in `__public_api__` is available in the
-# calling notebook's scope. This notebook does NOT auto-execute
-# `run_pipeline`; the caller drives that.
+# Query the log later with SQL:
 #
-# Kept in sync by hand with `src/spark_az/session.py` and
-# `src/spark_az/pipeline_logger.py`. When the library changes, copy
-# the new bodies into the cell below (minus the `from .session import
-# get_spark` relative import).
+# ```sql
+# SELECT pipeline_run_id, child_index, notebook_path, status,
+#        duration_ms / 1000 AS seconds, error_class, error_message
+# FROM   lab.__pipeline_runlog
+# WHERE  pipeline_name = 'nightly_lab_refresh'
+# ORDER  BY pipeline_run_id DESC, child_index;
+# ```
 
-# %%
-"""SparkSession lookup helpers.
+# %% [markdown]
+# ## Example — run mode (pipeline activity)
+#
+# Configure a Synapse pipeline **Notebook activity** to point at this
+# notebook and pass JSON arguments:
+#
+# ```json
+# {
+#   "notebooks": [
+#     {"path": "/notebooks/extract"},
+#     {"path": "/notebooks/transform"},
+#     {"path": "/notebooks/load"}
+#   ],
+#   "log_table": "lab.__pipeline_runlog",
+#   "pipeline_name": "nightly_lab_refresh",
+#   "fail_fast": true
+# }
+# ```
+#
+# Synapse replaces the values in the parameter cell below at runtime.
+# The final cell calls `run_pipeline(...)` and the orchestrator notebook
+# either succeeds or raises — failure propagates to the Synapse
+# pipeline so it can retry or alert.
 
-The package never creates a SparkSession. Synapse notebooks already provide
-one, and local PySpark jobs should register or activate one explicitly.
-"""
+# %% [markdown]
+# ## Parameters
+#
+# Synapse will replace these defaults at runtime when the notebook is
+# invoked from a pipeline activity. Empty `notebooks` makes the run
+# cell at the bottom a no-op, so `%run` users in library mode are
+# unaffected.
+
+# %% tags=["parameters"]
 from __future__ import annotations
 
+from typing import Any, Dict, List
+
+notebooks: "List[Dict[str, Any]]" = []
+log_table: str = "lab.__pipeline_runlog"
+pipeline_name: str = ""
+fail_fast: bool = True
+default_timeout_seconds: int = 1800
+
+# %% [markdown]
+# ## Session helpers
+#
+# Look up the active `SparkSession` without ever calling
+# `SparkSession.builder.getOrCreate()`. Synapse pre-creates the
+# session; calling `getOrCreate` from notebook code can fight the
+# runtime. `set_spark()` is for local scripts and tests where Spark
+# isn't pre-active.
+
+# %%
 import json
 import logging
 import os
@@ -61,10 +144,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
-    Any,
-    Dict,
     Iterable,
-    List,
     Optional,
     Tuple,
     TypedDict,
@@ -72,13 +152,13 @@ from typing import (
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
-    from pyspark.sql.types import StructType  # noqa: F401 — used in annotations
+    from pyspark.sql.types import StructType  # noqa: F401 - used in annotations
 
 _spark: Optional["SparkSession"] = None
 
 
 def set_spark(session: "SparkSession") -> None:
-    """Register the SparkSession used by spark_az.
+    """Register the SparkSession used by the inline pipeline_logger.
 
     Use this in local scripts/tests or any runtime where Spark does not
     expose an active session. Synapse notebooks usually do not need it
@@ -86,16 +166,6 @@ def set_spark(session: "SparkSession") -> None:
 
     Args:
         session: A live ``SparkSession``.
-
-    Examples:
-        In a Synapse notebook (rarely needed):
-
-        >>> set_spark(spark)
-
-        In a local script:
-
-        >>> from pyspark.sql import SparkSession
-        >>> set_spark(SparkSession.builder.getOrCreate())
     """
     global _spark
     _spark = session
@@ -113,11 +183,6 @@ def get_spark() -> "SparkSession":
 
     Raises:
         RuntimeError: No registered session and no active session.
-
-    Examples:
-        >>> spark = get_spark()
-        >>> spark.sql("SELECT 1").collect()
-        [Row(1=1)]
     """
     if _spark is not None:
         return _spark
@@ -128,8 +193,8 @@ def get_spark() -> "SparkSession":
 
     raise RuntimeError(
         "No active SparkSession found. In Synapse this should usually be "
-        "available automatically; otherwise call set_spark(spark) "
-        "once before reading, writing, or running Spark jobs."
+        "available automatically; otherwise call set_spark(spark) once "
+        "before reading, writing, or running Spark jobs."
     )
 
 
@@ -142,10 +207,16 @@ def _active_spark_session() -> Optional["SparkSession"]:
     return SparkSession.getActiveSession()
 
 
-# ---------------------------------------------------------------------------
-# pipeline_logger — Synapse orchestrator + Delta logging
-# ---------------------------------------------------------------------------
+# %% [markdown]
+# ## Logger setup
+#
+# A module-scoped `logging.Logger` named `spark_az.pipeline_logger`.
+# Idempotent handler setup with a `propagate=False` so we don't double-log
+# through pytest's root capture during tests. Per-child stdout lines go
+# here via `log.info(...)` — attach an `AzureLogHandler` to fan out to
+# Application Insights without changing any code in this notebook.
 
+# %%
 log: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
 _handler: logging.Handler = logging.StreamHandler()
 _handler.setFormatter(
@@ -158,7 +229,16 @@ log.addHandler(_handler)
 log.setLevel(logging.INFO)
 log.propagate = False
 
+# %% [markdown]
+# ## Schema and TypedDicts
+#
+# `LOG_SCHEMA_FIELDS` is the single source of truth for the Delta log
+# table's columns. `ChildSpec` describes one child to run; `ChildResult`
+# describes one row written to the log per child invocation. Note that
+# `ChildSpec.path` is required (enforced via a `TypedDict` mixin) while
+# the other keys are optional.
 
+# %%
 LOG_SCHEMA_FIELDS: List[Tuple[str, str]] = [
     ("pipeline_run_id", "string"),
     ("pipeline_name", "string"),
@@ -237,16 +317,21 @@ class ChildResult(TypedDict):
     error_traceback: str
     orchestrator_notebook: str
 
+# %% [markdown]
+# ## Spark / Synapse helpers
+#
+# `_log_schema()` lazy-builds the Spark `StructType` so the notebook
+# parses without `pyspark` installed (Synapse provides it at runtime).
+# `_nbutils()` resolves `mssparkutils` through whichever import path
+# the runtime offers. `ensure_log_table()` creates the Delta log table
+# if it doesn't already exist.
 
+# %%
 def _log_schema() -> "StructType":
     """Build the Spark schema for the log table.
 
     Returns:
         ``StructType`` with all columns ``nullable=False``.
-
-    Examples:
-        >>> _log_schema().fieldNames()[:2]
-        ['pipeline_run_id', 'pipeline_name']
     """
     from pyspark.sql.types import (
         LongType,
@@ -269,42 +354,15 @@ def _log_schema() -> "StructType":
     )
 
 
-def _truncate(text: str, *, limit: int) -> str:
-    """Truncate ``text`` to at most ``limit`` chars + a marker suffix.
-
-    The marker suffix is intentionally outside the limit budget so callers
-    can reason about the leading content unambiguously.
-
-    Args:
-        text: Source string. May be empty.
-        limit: Maximum number of source characters to keep.
-
-    Returns:
-        ``text`` itself if shorter than ``limit``; otherwise the first
-        ``limit`` characters followed by ``"…[truncated]"``.
-
-    Examples:
-        >>> _truncate("hello", limit=10)
-        'hello'
-        >>> _truncate("x" * 50, limit=3)
-        'xxx…[truncated]'
-    """
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "…[truncated]"
-
-
 def _nbutils() -> Any:
     """Return Synapse's ``mssparkutils`` regardless of which path imports it.
 
     Returns:
-        The ``mssparkutils`` module-like object (real in Synapse, stubbed
-        in tests).
+        The ``mssparkutils`` module-like object.
 
     Raises:
         RuntimeError: Neither ``notebookutils.mssparkutils`` nor
-            ``mssparkutils`` is importable. This happens when run outside
-            Synapse without the test fake installed.
+            ``mssparkutils`` is importable.
     """
     try:
         from notebookutils import mssparkutils
@@ -345,13 +403,27 @@ def ensure_log_table(table: str) -> None:
         .saveAsTable(table)
     )
 
+# %% [markdown]
+# ## Small utilities
+#
+# String truncation, timestamp helpers, args JSON serialization, and the
+# `_skipped_result` builder used to record children that didn't get to
+# run because an earlier `fail_fast=True` failure cancelled them.
+
+# %%
+def _truncate(text: str, *, limit: int) -> str:
+    """Truncate ``text`` to at most ``limit`` chars + a marker suffix.
+
+    The marker suffix is intentionally outside the limit budget so callers
+    can reason about the leading content unambiguously.
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…[truncated]"
+
 
 def _now_iso() -> str:
-    """Return the current UTC time as an ISO 8601 string with microseconds.
-
-    Returns:
-        ``"YYYY-MM-DDTHH:MM:SS.ffffff+00:00"``.
-    """
+    """Return the current UTC time as an ISO 8601 string with microseconds."""
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -360,13 +432,6 @@ def _serialize_args(args: Optional[Dict[str, Any]]) -> str:
 
     Uses ``default=str`` so unusual values (datetimes, paths) survive
     without raising.
-
-    Args:
-        args: The child's args dict. ``None`` and ``{}`` both round-trip
-            to ``"{}"``.
-
-    Returns:
-        A compact JSON string.
     """
     return json.dumps(args or {}, default=str, sort_keys=True)
 
@@ -379,32 +444,7 @@ def _skipped_result(
     child_index: int,
     orchestrator_notebook: str,
 ) -> ChildResult:
-    """Build a ``ChildResult`` for a child that was skipped by ``fail_fast``.
-
-    Every NOT NULL log column gets a sensible default. ``started_at`` and
-    ``finished_at`` are set to the moment the skip is recorded — they are
-    not real durations.
-
-    Args:
-        spec: The child that did not run.
-        pipeline_run_id: UUID shared across the ``run_pipeline()`` call.
-        pipeline_name: Caller-supplied label.
-        child_index: Zero-based position in the input list.
-        orchestrator_notebook: Best-effort notebook name from runtime
-            context. Empty string if unavailable.
-
-    Returns:
-        A ``ChildResult`` with ``status="skipped"``.
-
-    Examples:
-        >>> r = _skipped_result(
-        ...     {"path": "/x"},
-        ...     pipeline_run_id="r", pipeline_name="p",
-        ...     child_index=0, orchestrator_notebook="",
-        ... )
-        >>> r["status"]
-        'skipped'
-    """
+    """Build a :class:`ChildResult` for a child that was skipped by ``fail_fast``."""
     now: str = _now_iso()
     return {
         "pipeline_run_id": pipeline_run_id,
@@ -423,7 +463,19 @@ def _skipped_result(
         "orchestrator_notebook": orchestrator_notebook,
     }
 
+# %% [markdown]
+# ## Stdout formatting
+#
+# `_print_line` emits one human-readable line per child via the module
+# logger. Output looks like:
+#
+# ```
+# 14:02:11 [INFO] spark_az.pipeline_logger: [14:02:11] [OK]     extract           1.83s  exit=42rows
+# 14:02:13 [INFO] spark_az.pipeline_logger: [14:02:13] [FAIL]   transform         0.42s  ValueError: missing column 'id'
+# 14:02:13 [INFO] spark_az.pipeline_logger: [14:02:13] [SKIP]   load                     (fail_fast)
+# ```
 
+# %%
 _STATUS_BADGE: Dict[str, str] = {
     "ok": "OK",
     "failed": "FAIL",
@@ -442,19 +494,6 @@ def _print_line(result: ChildResult, *, display_name: str) -> None:
 
     Logged at ``INFO`` to ``spark_az.pipeline_logger`` so users can attach
     additional handlers (e.g. ``AzureLogHandler``) without changes here.
-
-    Format::
-
-        [hh:mm:ss] [STATUS] <name 18ch> <duration>  <suffix>
-
-    - Duration is omitted for ``skipped``.
-    - Suffix is ``exit=<value>`` on ok, ``<error_class>: <message>`` on
-      failed/timeout, ``(fail_fast)`` on skipped.
-
-    Args:
-        result: The :class:`ChildResult` being reported.
-        display_name: Pre-resolved display name (caller chooses spec
-            ``name`` or basename of ``path``).
     """
     badge: str = _STATUS_BADGE.get(result["status"], result["status"].upper())
     badge_field: str = f"[{badge}]".ljust(_STDOUT_BADGE_WIDTH + 2)
@@ -489,7 +528,16 @@ def _now_clock() -> str:
     """Return the current local wall clock as ``HH:MM:SS``."""
     return datetime.now().strftime("%H:%M:%S")
 
+# %% [markdown]
+# ## `run_child` — execute one child notebook
+#
+# Calls `mssparkutils.notebook.run(path, timeout_seconds, args)`, times
+# it, and maps the outcome to a `ChildResult`. Never raises — exceptions
+# become `status="failed"` rows (or `status="timeout"` if the exception
+# message contains a timeout hint). Decision to re-raise lives in
+# `run_pipeline`.
 
+# %%
 _TIMEOUT_HINTS: List[str] = ["timeout", "timed out"]
 
 
@@ -521,35 +569,14 @@ def run_child(
     """Run one child notebook and return a :class:`ChildResult`.
 
     Never raises. Any exception from ``mssparkutils.notebook.run`` is
-    captured into the result. The decision to re-raise lives in
-    :func:`run_pipeline` so this function stays composable for future
-    parallel orchestration.
+    captured into the result.
 
     Status mapping:
 
     - Returns normally → ``"ok"``; ``exit_value`` is ``str(returned)``.
-    - Raises with ``"timeout"`` or ``"timed out"`` in the exception message
-      → ``"timeout"``.
+    - Raises with ``"timeout"`` or ``"timed out"`` in the exception
+      message → ``"timeout"``.
     - Any other exception → ``"failed"``.
-
-    Args:
-        spec: The child to run.
-        pipeline_run_id: UUID shared across one ``run_pipeline()`` call.
-        pipeline_name: Caller-supplied label.
-        child_index: Zero-based position in the input list.
-        default_timeout_seconds: Used when ``spec["timeout_seconds"]`` is
-            absent.
-
-    Returns:
-        A :class:`ChildResult` describing the outcome.
-
-    Examples:
-        >>> result = run_child(
-        ...     {"path": "/notebooks/extract", "args": {"date": "2026-05-21"}},
-        ...     pipeline_run_id="r",
-        ...     pipeline_name="p",
-        ...     child_index=0,
-        ... )
     """
     nb: Any = _nbutils()
     timeout: int = int(spec.get("timeout_seconds", default_timeout_seconds))
@@ -608,19 +635,19 @@ def run_child(
         "orchestrator_notebook": orchestrator,
     }
 
+# %% [markdown]
+# ## Delta writer
+#
+# `_append_rows` batches every `ChildResult` from one `run_pipeline()`
+# call into a single Delta append. One commit per call, not one per
+# row. `audited_at` is stamped server-side with `current_timestamp()`.
 
+# %%
 def _append_rows(table: str, results: List[ChildResult]) -> None:
     """Append a batch of :class:`ChildResult` rows to ``table``.
 
     Stamps ``audited_at = current_timestamp()`` at write time. One Delta
     commit per call regardless of batch size.
-
-    Args:
-        table: Fully-qualified managed Delta table name.
-        results: Rows to append. Empty list is a no-op.
-
-    Examples:
-        >>> _append_rows("lab.__pipeline_runlog", [...])
     """
     if not results:
         return
@@ -662,13 +689,20 @@ def _string_or_long(type_name: str) -> Any:
         return LongType()
     return StringType()
 
+# %% [markdown]
+# ## `run_pipeline` — orchestrator entry point
+#
+# Generates one `pipeline_run_id` (UUID4) for the call. Runs each child
+# sequentially via `run_child`. Prints a line per child. Batches all
+# log rows into one Delta append at the end. Re-raises (after the
+# append) on first failure when `fail_fast=True`.
 
+# %%
 def _display_name(spec: ChildSpec) -> str:
     """Resolve the display name for log lines.
 
-    Returns the explicit ``name`` from the spec if provided, otherwise the
-    basename of ``path``. Falls back to the raw path when basename is
-    empty (e.g. paths ending in a slash).
+    Returns the explicit ``name`` from the spec if provided, otherwise
+    the basename of ``path``.
     """
     explicit: Optional[str] = spec.get("name")
     if explicit:
@@ -687,18 +721,16 @@ def run_pipeline(
 ) -> List[ChildResult]:
     """Run a sequence of child notebooks and log each one.
 
-    Generates one ``pipeline_run_id`` (UUID4) for the call. For each child:
-
-    1. Calls ``mssparkutils.notebook.run(path, timeout_seconds, args)``.
-    2. Captures wall time, exit value, and exception (if any).
-    3. Emits one stdout line via the module logger.
-    4. Appends a :class:`ChildResult` to the in-memory result list.
+    Generates one ``pipeline_run_id`` (UUID4) for the call. For each
+    child: calls ``mssparkutils.notebook.run``, captures wall time +
+    exit value + exception, emits one log line, appends a
+    :class:`ChildResult` to the in-memory list.
 
     After the loop, the full result list is written to ``log_table`` in
-    one Delta append (when ``write_log=True``). If ``fail_fast=True`` and
-    any child failed, the captured failure is re-raised AFTER the log
-    write so the orchestrator notebook itself fails in Synapse and the
-    log table is durable for post-mortem.
+    one Delta append (when ``write_log=True``). If ``fail_fast=True``
+    and any child failed, the captured failure is re-raised AFTER the
+    log write so the orchestrator notebook itself fails in Synapse and
+    the log table is durable for post-mortem.
 
     Args:
         children: Iterable of :class:`ChildSpec` entries.
@@ -707,9 +739,9 @@ def run_pipeline(
         pipeline_name: Caller-supplied label stamped on every row.
         fail_fast: When ``True`` (default), the first failure marks
             remaining children as ``status="skipped"`` and the call
-            re-raises after the log write. When ``False``, every child is
-            attempted and the call returns normally with failures captured
-            as rows.
+            re-raises after the log write. When ``False``, every child
+            is attempted and the call returns normally with failures
+            captured as rows.
         default_timeout_seconds: Used when a :class:`ChildSpec` does not
             specify its own ``timeout_seconds``.
         write_log: When ``False``, emits stdout but skips the Delta
@@ -719,38 +751,15 @@ def run_pipeline(
         When ``fail_fast=False`` or all children succeeded: the full
         ``List[ChildResult]`` in input order, including ``"skipped"``
         rows if any. When ``fail_fast=True`` and a child failed, the
-        function re-raises instead of returning — the full list is
-        durable in ``log_table`` for the caller to query.
+        function re-raises instead of returning.
 
     Raises:
         RuntimeError: ``mssparkutils`` / ``notebookutils`` not importable
             (not running in Synapse). Raised before the child loop.
-        RuntimeError: Re-raised after the log write when ``fail_fast=True``
-            and any child failed. The exception carries the first failing
-            child's ``error_class`` and ``error_message``.
-
-    Examples:
-        Sequential run with fail-fast:
-
-        >>> results = run_pipeline(
-        ...     [
-        ...         {"path": "/notebooks/extract", "args": {"date": "2026-05-21"}},
-        ...         {"path": "/notebooks/transform"},
-        ...         {"path": "/notebooks/load"},
-        ...     ],
-        ...     log_table="lab.__pipeline_runlog",
-        ...     pipeline_name="nightly_lab_refresh",
-        ... )
-
-        Run-all (continue past failures):
-
-        >>> results = run_pipeline(
-        ...     specs,
-        ...     log_table="lab.__pipeline_runlog",
-        ...     pipeline_name="p",
-        ...     fail_fast=False,
-        ... )
-        >>> failed = [r for r in results if r["status"] != "ok"]
+        RuntimeError: Re-raised after the log write when
+            ``fail_fast=True`` and any child failed. The exception
+            carries the first failing child's ``error_class`` and
+            ``error_message``.
     """
     _nbutils()
 
@@ -800,8 +809,7 @@ def run_pipeline(
     return results
 
 
-# Public surface available after `%run`:
-__public_api__ = [
+__public_api__: List[str] = [
     "ChildResult",
     "ChildSpec",
     "ensure_log_table",
@@ -812,13 +820,37 @@ __public_api__ = [
     "set_spark",
 ]
 
-__all__ = [
-    "ChildResult",
-    "ChildSpec",
-    "ensure_log_table",
-    "get_spark",
-    "log",
-    "run_child",
-    "run_pipeline",
-    "set_spark",
-]
+__all__: List[str] = list(__public_api__)
+
+# %% [markdown]
+# ## Run
+#
+# This cell calls `run_pipeline(...)` if `notebooks` is non-empty.
+# That makes the notebook safe to `%run` for library mode (empty
+# default → no-op) and useful for direct-run mode (set parameters
+# from a Synapse pipeline activity, run all → executes children).
+#
+# Results are exposed as the variable `pipeline_results` for downstream
+# cells or for the caller to inspect.
+
+# %%
+from typing import cast as _cast
+
+pipeline_results: "List[ChildResult]" = []
+if notebooks:
+    pipeline_results = run_pipeline(
+        _cast("List[ChildSpec]", notebooks),
+        log_table=log_table,
+        pipeline_name=pipeline_name,
+        fail_fast=fail_fast,
+        default_timeout_seconds=default_timeout_seconds,
+    )
+
+# %% [markdown]
+# ## Maintenance
+#
+# This notebook is **hand-maintained** in sync with the canonical
+# library in `src/spark_az/session.py` and `src/spark_az/pipeline_logger.py`.
+# When the library changes, regenerate this notebook by copying the
+# new bodies in, then run `bash scripts/build_notebooks.sh` to rebuild
+# the `.ipynb` from the `.py`.
