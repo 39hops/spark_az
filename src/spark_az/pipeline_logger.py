@@ -164,6 +164,34 @@ def _truncate(text: str, *, limit: int) -> str:
     return text[:limit] + "…[truncated]"
 
 
+def _nbutils() -> Any:
+    """Return Synapse's ``mssparkutils`` regardless of which path imports it.
+
+    Returns:
+        The ``mssparkutils`` module-like object (real in Synapse, stubbed
+        in tests).
+
+    Raises:
+        RuntimeError: Neither ``notebookutils.mssparkutils`` nor
+            ``mssparkutils`` is importable. This happens when run outside
+            Synapse without the test fake installed.
+    """
+    try:
+        from notebookutils import mssparkutils
+
+        return mssparkutils
+    except ImportError:
+        try:
+            import mssparkutils
+
+            return mssparkutils
+        except ImportError:
+            raise RuntimeError(
+                "mssparkutils / notebookutils not importable; "
+                "spark_az.pipeline_logger must run inside Azure Synapse."
+            )
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",

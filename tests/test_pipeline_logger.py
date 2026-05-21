@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Set, get_type_hints
 
+import sys
+
 import pytest
 
 
@@ -78,3 +80,23 @@ def test_truncate_empty_string_passes_through() -> None:
     from spark_az.pipeline_logger import _truncate
 
     assert _truncate("", limit=10) == ""
+
+
+def test_nbutils_returns_module_when_notebookutils_present(
+    fake_mssparkutils: Any,
+) -> None:
+    from spark_az.pipeline_logger import _nbutils
+
+    nb: Any = _nbutils()
+    assert nb is fake_mssparkutils
+
+
+def test_nbutils_raises_when_neither_module_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "notebookutils", None)
+    monkeypatch.setitem(sys.modules, "mssparkutils", None)
+    from spark_az.pipeline_logger import _nbutils
+
+    with pytest.raises(RuntimeError, match="mssparkutils"):
+        _nbutils()
