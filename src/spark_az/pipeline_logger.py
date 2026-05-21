@@ -22,6 +22,7 @@ Conventions
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import (
     TYPE_CHECKING,
@@ -37,6 +38,19 @@ from .session import get_spark
 
 if TYPE_CHECKING:
     from pyspark.sql.types import StructType
+
+
+log: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
+_handler: logging.Handler = logging.StreamHandler()
+_handler.setFormatter(
+    logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+)
+log.addHandler(_handler)
+log.setLevel(logging.INFO)
+log.propagate = False
 
 
 LOG_SCHEMA_FIELDS: List[Tuple[str, str]] = [
@@ -304,9 +318,76 @@ def _skipped_result(
     }
 
 
+_STATUS_BADGE: Dict[str, str] = {
+    "ok": "OK",
+    "failed": "FAIL",
+    "timeout": "TIME",
+    "skipped": "SKIP",
+}
+
+_STDOUT_NAME_WIDTH: int = 18
+_STDOUT_BADGE_WIDTH: int = 6
+_STDOUT_EXIT_MAX: int = 40
+_STDOUT_ERROR_MAX: int = 80
+
+
+def _print_line(result: ChildResult, *, display_name: str) -> None:
+    """Emit one human-readable log line for a finished child.
+
+    Logged at ``INFO`` to ``spark_az.pipeline_logger`` so users can attach
+    additional handlers (e.g. ``AzureLogHandler``) without changes here.
+
+    Format::
+
+        [hh:mm:ss] [STATUS] <name 18ch> <duration>  <suffix>
+
+    - Duration is omitted for ``skipped``.
+    - Suffix is ``exit=<value>`` on ok, ``<error_class>: <message>`` on
+      failed/timeout, ``(fail_fast)`` on skipped.
+
+    Args:
+        result: The :class:`ChildResult` being reported.
+        display_name: Pre-resolved display name (caller chooses spec
+            ``name`` or basename of ``path``).
+    """
+    badge: str = _STATUS_BADGE.get(result["status"], result["status"].upper())
+    badge_field: str = f"[{badge}]".ljust(_STDOUT_BADGE_WIDTH + 2)
+    name_field: str = display_name[:_STDOUT_NAME_WIDTH].ljust(_STDOUT_NAME_WIDTH)
+    clock: str = _now_clock()
+
+    if result["status"] == "skipped":
+        suffix: str = "(fail_fast)"
+        duration_field: str = " " * 7
+    else:
+        duration_field = f"{result['duration_ms'] / 1000:>6.2f}s"
+        if result["status"] == "ok":
+            exit_text: str = _truncate(result["exit_value"], limit=_STDOUT_EXIT_MAX)
+            suffix = f"exit={exit_text}" if exit_text else ""
+        else:
+            message: str = _truncate(
+                result["error_message"], limit=_STDOUT_ERROR_MAX
+            )
+            suffix = f"{result['error_class']}: {message}".strip(": ")
+
+    log.info(
+        "[%s] %s %s %s  %s",
+        clock,
+        badge_field,
+        name_field,
+        duration_field,
+        suffix,
+    )
+
+
+def _now_clock() -> str:
+    """Return the current local wall clock as ``HH:MM:SS``."""
+    return datetime.now().strftime("%H:%M:%S")
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",
     "LOG_SCHEMA_FIELDS",
     "ensure_log_table",
+    "log",
 ]

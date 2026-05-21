@@ -128,3 +128,99 @@ def test_skipped_result_has_expected_fields() -> None:
     assert result["orchestrator_notebook"] == "/notebooks/orch"
     assert result["started_at"] == result["finished_at"]
     assert result["started_at"] != ""
+
+
+import logging
+
+
+def _result_template() -> Dict[str, Any]:
+    return {
+        "pipeline_run_id": "r",
+        "pipeline_name": "p",
+        "child_index": 0,
+        "notebook_path": "/notebooks/extract",
+        "status": "ok",
+        "started_at": "2026-05-21T12:00:00+00:00",
+        "finished_at": "2026-05-21T12:00:01.830000+00:00",
+        "duration_ms": 1830,
+        "exit_value": "42rows",
+        "args_json": "{}",
+        "error_class": "",
+        "error_message": "",
+        "error_traceback": "",
+        "orchestrator_notebook": "",
+    }
+
+
+def test_module_logger_is_configured() -> None:
+    from spark_az.pipeline_logger import log
+
+    assert log.name == "spark_az.pipeline_logger"
+    assert log.propagate is False
+    assert any(isinstance(h, logging.StreamHandler) for h in log.handlers)
+
+
+def test_print_line_ok_status(caplog: pytest.LogCaptureFixture) -> None:
+    from spark_az.pipeline_logger import _print_line, log
+
+    result: Dict[str, Any] = _result_template()
+    with caplog.at_level(logging.INFO, logger=log.name):
+        _print_line(result, display_name="extract")
+
+    messages: List[str] = [r.getMessage() for r in caplog.records]
+    assert any("[OK]" in m for m in messages)
+    assert any("extract" in m for m in messages)
+    assert any("1.83s" in m for m in messages)
+    assert any("exit=42rows" in m for m in messages)
+
+
+def test_print_line_failed_status(caplog: pytest.LogCaptureFixture) -> None:
+    from spark_az.pipeline_logger import _print_line, log
+
+    result: Dict[str, Any] = _result_template()
+    result["status"] = "failed"
+    result["duration_ms"] = 420
+    result["exit_value"] = ""
+    result["error_class"] = "ValueError"
+    result["error_message"] = "missing column 'id'"
+    with caplog.at_level(logging.INFO, logger=log.name):
+        _print_line(result, display_name="transform")
+
+    messages: List[str] = [r.getMessage() for r in caplog.records]
+    assert any("[FAIL]" in m for m in messages)
+    assert any("transform" in m for m in messages)
+    assert any("0.42s" in m for m in messages)
+    assert any("ValueError: missing column 'id'" in m for m in messages)
+
+
+def test_print_line_skipped_status(caplog: pytest.LogCaptureFixture) -> None:
+    from spark_az.pipeline_logger import _print_line, log
+
+    result: Dict[str, Any] = _result_template()
+    result["status"] = "skipped"
+    result["duration_ms"] = 0
+    result["exit_value"] = ""
+    with caplog.at_level(logging.INFO, logger=log.name):
+        _print_line(result, display_name="load")
+
+    messages: List[str] = [r.getMessage() for r in caplog.records]
+    assert any("[SKIP]" in m for m in messages)
+    assert any("load" in m for m in messages)
+    assert any("(fail_fast)" in m for m in messages)
+
+
+def test_print_line_timeout_status(caplog: pytest.LogCaptureFixture) -> None:
+    from spark_az.pipeline_logger import _print_line, log
+
+    result: Dict[str, Any] = _result_template()
+    result["status"] = "timeout"
+    result["duration_ms"] = 1800000
+    result["error_class"] = "RuntimeError"
+    result["error_message"] = "notebook timed out after 1800 seconds"
+    with caplog.at_level(logging.INFO, logger=log.name):
+        _print_line(result, display_name="extract")
+
+    messages: List[str] = [r.getMessage() for r in caplog.records]
+    assert any("[TIME]" in m for m in messages)
+    assert any("1800.00s" in m for m in messages)
+    assert any("timed out" in m for m in messages)

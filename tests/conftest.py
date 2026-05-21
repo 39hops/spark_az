@@ -111,6 +111,22 @@ def _reset_spark_registration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(session_module, "_spark", None, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _propagate_pipeline_logger_to_caplog(
+    caplog: pytest.LogCaptureFixture,
+) -> Any:
+    """Add caplog's handler directly to the pipeline_logger so that records
+    are captured even though the logger has ``propagate=False``."""
+    import logging
+
+    logger: logging.Logger = logging.getLogger("spark_az.pipeline_logger")
+    logger.addHandler(caplog.handler)
+    try:
+        yield
+    finally:
+        logger.removeHandler(caplog.handler)
+
+
 @pytest.fixture
 def registered_spark(spark: Any) -> Any:
     """Register the local Spark session with the package and yield it."""
