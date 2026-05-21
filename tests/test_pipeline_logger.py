@@ -502,3 +502,20 @@ def test_run_pipeline_fail_fast_false_runs_everything(
         "/notebooks/middle",
         "/notebooks/last",
     ]
+
+
+def test_public_api_reexported_from_package_root() -> None:
+    import spark_az
+
+    expected: List[str] = [
+        "ChildResult",
+        "ChildSpec",
+        "ensure_log_table",
+        "get_spark",
+        "run_child",
+        "run_pipeline",
+        "set_spark",
+    ]
+    for name in expected:
+        assert hasattr(spark_az, name), f"spark_az missing {name}"
+    assert set(spark_az.__all__) == set(expected)
