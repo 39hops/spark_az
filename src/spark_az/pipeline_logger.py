@@ -139,6 +139,31 @@ def _log_schema() -> "StructType":
     )
 
 
+def _truncate(text: str, *, limit: int) -> str:
+    """Truncate ``text`` to at most ``limit`` chars + a marker suffix.
+
+    The marker suffix is intentionally outside the limit budget so callers
+    can reason about the leading content unambiguously.
+
+    Args:
+        text: Source string. May be empty.
+        limit: Maximum number of source characters to keep.
+
+    Returns:
+        ``text`` itself if shorter than ``limit``; otherwise the first
+        ``limit`` characters followed by ``"…[truncated]"``.
+
+    Examples:
+        >>> _truncate("hello", limit=10)
+        'hello'
+        >>> _truncate("x" * 50, limit=3)
+        'xxx…[truncated]'
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…[truncated]"
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",

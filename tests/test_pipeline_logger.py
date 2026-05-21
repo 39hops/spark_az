@@ -57,3 +57,24 @@ def test_childspec_total_false() -> None:
 
     spec: pl.ChildSpec = {"path": "/x"}
     assert spec["path"] == "/x"
+
+
+def test_truncate_under_limit_returns_input() -> None:
+    from spark_az.pipeline_logger import _truncate
+
+    assert _truncate("hello", limit=100) == "hello"
+
+
+def test_truncate_over_limit_appends_marker() -> None:
+    from spark_az.pipeline_logger import _truncate
+
+    out: str = _truncate("x" * 50, limit=20)
+    assert out.startswith("x" * 20)
+    assert out.endswith("…[truncated]")
+    assert len(out) <= 20 + len("…[truncated]")
+
+
+def test_truncate_empty_string_passes_through() -> None:
+    from spark_az.pipeline_logger import _truncate
+
+    assert _truncate("", limit=10) == ""
