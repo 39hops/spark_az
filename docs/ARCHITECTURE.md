@@ -20,10 +20,8 @@ no schema management. It is intentionally small.
                             v
 +----------------------------------------------------------+
 | Orchestrator notebook                                    |
-|   - notebooks/_logging/lgr.ipynb (thin wrapper, uses  |
-|     installed `spark_az` wheel), OR                      |
-|   - notebooks/_logging/lgr_inline.ipynb (entire       |
-|     library inline; %run-able or pipeline-activity-able) |
+|   notebooks/lgr.ipynb (entire library inline,            |
+|   auto-generated from src/spark_az/)                     |
 +----------------------------------------------------------+
                             |
               run_pipeline(specs, log_table=..., ...)
@@ -110,8 +108,14 @@ tests/
 └── test_lgr_delta.py          # 4 integration tests with local Delta
 
 notebooks/
-├── lgr.{py,ipynb}             # thin wrapper, imports installed library
-└── lgr_inline.{py,ipynb}      # entire library inline, %run-able
+└── lgr.{py,ipynb}             # all-in-one drop-in, auto-inlined from src/
+
+synapse/
+└── lgr_pipeline.json          # reference Synapse pipeline JSON
+
+scripts/
+├── inline_lgr_notebook.py     # concatenates src/spark_az/*.py → notebooks/lgr.py
+└── build_notebooks.sh         # runs the inliner then jupytext --to ipynb
 ```
 
 ## Design rationale (pointers)
@@ -122,11 +126,12 @@ notebooks/
 - Why one batched Delta append per `run_pipeline` call instead of one
   per child: spec section "Delta schema" and rationale in
   `_append_rows`.
-- Why two notebook artifacts side-by-side (thin wrapper + inline):
-  the user asked for both. The wheel pathway is the "proper" Python
-  packaging story; the inline notebook is the zero-install delivery
-  vehicle for ad-hoc use. See the inline notebook's top-of-file
-  markdown for the maintenance contract.
+- Why ship only one notebook (the all-in-one) instead of a wheel +
+  thin wrapper: user feedback — they don't want to build/install. The
+  library at `src/spark_az/` is kept as the maintainable source of
+  truth that the notebook is generated from; tests verify the source,
+  and `scripts/inline_lgr_notebook.py` rebuilds the notebook in one
+  command when source changes.
 
 ## What this document is NOT
 
