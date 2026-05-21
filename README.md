@@ -2,98 +2,63 @@
 
 Azure Synapse Spark notebook orchestration with structured Delta logging.
 
-A small Python library + a self-contained Synapse notebook that lets one
-"orchestrator" notebook run a sequence of child notebooks via
-`mssparkutils.notebook.run`, capture exit values and exceptions, and write
-one structured Delta row per child to a managed log table.
+One orchestrator notebook runs a sequence of child notebooks via
+`mssparkutils.notebook.run`, captures exit values and exceptions, and
+writes one structured Delta row per child to a managed log table. The
+entire library lives inline in a single notebook so there's no wheel
+to build, no Spark-pool packages to register — drop the notebook in,
+set parameters, run.
 
 Style and conventions mirror the companion library
 [`github.com/39hops/spark_lib`](https://github.com/39hops/spark_lib).
 
-## Three ways to use it
+## Setup
 
-### 1. Drop-in starter notebook — recommended for any new Synapse pipeline
+1. **Upload** `notebooks/lgr.ipynb` into your Synapse workspace
+   (Develop hub → `+` → Import).
+2. **Attach** it to a Spark pool.
+3. **Import** the reference pipeline at `synapse/lgr_pipeline.json`
+   (Integrate hub → `+` → Pipeline → `{}` Code view → paste).
+4. Customise the `notebooks` parameter on the pipeline activity with
+   your child notebook paths. Publish.
 
-Upload `notebooks/_logging/lgr_starter.ipynb` to your workspace, attach a
-Synapse Pipeline Notebook activity to it, and pass the parameters from
-the activity:
+The `_meta.__pipeline_runlog` Delta table is created automatically on
+the first run.
+
+## Pipeline parameters
 
 | Parameter | Value | Notes |
 | --- | --- | --- |
 | `pipeline_run_id` | `@pipeline().RunId` | Synapse-injected; ties Delta rows to the pipeline run. |
 | `pipeline_name` | `@pipeline().Pipeline` | Stamped on every row. |
-| `log_table` | `_meta.__pipeline_runlog` | Managed Delta table. Created on first run. |
+| `log_table` | `_meta.__pipeline_runlog` | Managed Delta table. Database created on first run. |
 | `notebooks` | `[{"path": "...", "args": {...}}, ...]` | List of children to orchestrate. |
 | `fail_fast` | `true` (default) | Re-raises after writing the log on first failure. |
 | `default_timeout_seconds` | `1800` | Per-child default; override per-spec via `timeout_seconds`. |
 | `app_insights_connection_string` | `""` (default) | If set, fans logs out to App Insights. |
 
-A ready-to-import reference is at `synapse/lgr_starter_pipeline.json`.
-
-The starter ships JSON-structured logging by default and an optional
-`step()` helper you can use for in-orchestrator work. Edit the
-parameter cell directly to run interactively.
-
-### 2. Zero-install — `%run` the inline notebook
-
-Upload `notebooks/_logging/lgr_inline.ipynb` to your Synapse workspace,
-then from any other notebook:
-
-```python
-%run "Shared/lib/lgr_inline"
-
-results = run_pipeline(
-    [
-        {"path": "Shared/etl/extract",   "args": {"date": "2026-05-21"}},
-        {"path": "Shared/etl/transform"},
-        {"path": "Shared/etl/load",      "timeout_seconds": 3600},
-    ],
-    log_table="_meta.__pipeline_runlog",
-    pipeline_name="nightly_lab_refresh",
-)
-```
-
-No wheel, no Spark-pool package management — `%run` brings every public
-symbol (`run_pipeline`, `run_child`, `ChildSpec`, `ChildResult`,
-`ensure_log_table`, `set_spark`, `get_spark`, `log`) into the caller's
-scope. The same notebook also works as a Synapse pipeline notebook
-activity: set the `notebooks` / `log_table` / `pipeline_name` parameters
-from the activity, run all cells.
-
-### 3. Install the wheel — for repeat use across many notebooks
-
-```sh
-scripts/build.sh                # builds dist/spark_az-0.1.0-py3-none-any.whl
-```
-
-Upload the wheel to ADLS, register it as a workspace package on your
-Synapse Spark pool, then in any notebook on that pool:
-
-```python
-from spark_az import run_pipeline, ChildSpec
-
-results = run_pipeline([...], log_table="_meta.__pipeline_runlog", pipeline_name="...")
-```
-
-Use `notebooks/_logging/lgr.ipynb` (the thin orchestrator) the same
-way as the inline version.
-
-## What you get in the log table
-
-One Delta row per child notebook invocation, plus a `"skipped"` row for
-every child that didn't get to run when `fail_fast=True` halts the loop.
-Columns: `pipeline_run_id`, `pipeline_name`, `child_index`,
-`notebook_path`, `status` (`ok` | `failed` | `timeout` | `skipped`),
-`started_at`, `finished_at`, `duration_ms`, `exit_value`, `args_json`,
-`error_class`, `error_message`, `error_traceback`,
-`orchestrator_notebook`, `audited_at`.
+## Querying the log table
 
 ```sql
 SELECT pipeline_run_id, child_index, notebook_path, status,
        duration_ms / 1000 AS seconds, error_class, error_message
 FROM   _meta.__pipeline_runlog
-WHERE  pipeline_name = 'nightly_lab_refresh'
+WHERE  pipeline_name = '<your pipeline>'
 ORDER  BY pipeline_run_id DESC, child_index;
+```
+
+Run summary across many pipeline executions:
+
+```sql
+SELECT pipeline_run_id, COUNT(*) AS children,
+       SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+       MIN(started_at) AS run_start,
+       MAX(finished_at) AS run_end
+FROM   _meta.__pipeline_runlog
+WHERE  pipeline_name = '<your pipeline>'
+GROUP  BY pipeline_run_id
+ORDER  BY run_start DESC
+LIMIT  20;
 ```
 
 ## Failure semantics
@@ -108,31 +73,30 @@ ORDER  BY pipeline_run_id DESC, child_index;
 
 ## JSON logging + App Insights
 
-Call `set_json_formatter()` at the top of any notebook to switch the
-default stdout output to one JSON object per record:
+JSON-structured stdout is on by default in `notebooks/lgr.ipynb` —
+each `log.info(...)` is one JSON object:
 
 ```json
 {"ts": "2026-05-21T14:02:11+00:00", "level": "INFO", "logger": "spark_az.lgr", "msg": "[OK] extract 1.83s", "pipeline_run_id": "...", "step": "extract", "duration_ms": 1830}
 ```
 
-Synapse captures stdout into driver logs and forwards to any attached
-handler. For App Insights, one-line opt-in:
+Synapse captures stdout into driver logs. To also fan out to Azure
+Application Insights / Log Analytics, set the
+`app_insights_connection_string` pipeline parameter to your connection
+string. The setup cell calls `enable_app_insights(...)` automatically
+when it's non-empty.
+
+Requires the `azure-monitor-opentelemetry` package on the Spark pool.
+Without it, `enable_app_insights` raises an `ImportError` with install
+instructions.
+
+## In-orchestrator step timing
+
+`step()` is in scope inside the notebook. Use it around any work you
+want timed and structured-logged:
 
 ```python
-from spark_az import enable_app_insights
-enable_app_insights("InstrumentationKey=...;IngestionEndpoint=...")
-```
-
-Requires the optional `azure-monitor-opentelemetry` package
-(`pip install azure-monitor-opentelemetry`). Without it,
-`enable_app_insights` raises an `ImportError` with install instructions.
-
-## Per-step timing inside the orchestrator
-
-```python
-from spark_az import step
-
-with step("preflight", pipeline="nightly") as s:
+with step("preflight", pipeline=pipeline_name) as s:
     rows = source_count()
     s.metric("rows_seen", rows)
 
@@ -140,28 +104,35 @@ with step("aggregate"):
     publish_summary()
 ```
 
-`step()` emits three structured log records (start, ok-or-failed,
-end) with the active `pipeline_run_id` attached so they join cleanly
-with the per-child rows in the Delta log table. v2 keeps step records
-in stdout only; persisting them to a separate Delta table is a v3.
+Each step emits start / ok / failed structured log records with the
+active `pipeline_run_id` attached. Step records currently land in
+stdout (and any attached handler) — they are not yet written to their
+own Delta table.
 
 ## Local development
 
+The library lives at `src/spark_az/` with full pytest coverage.
+`notebooks/lgr.py` is the inlined form, auto-generated from the
+library by `scripts/inline_lgr_notebook.py`. Workflow:
+
 ```sh
 scripts/setup.sh                # pip install -e .[test,dev] in your venv
-scripts/test.sh                 # pytest — 34 tests, ~10 s after first run
-scripts/build.sh                # build the wheel
-scripts/build_notebooks.sh      # regenerate notebooks/*.ipynb from *.py via jupytext
+scripts/test.sh                 # pytest — 48 tests, ~15 s
+scripts/build_notebooks.sh      # rebuilds notebooks/lgr.{py,ipynb} from src/
 ```
+
+When you change anything in `src/spark_az/`, re-run
+`scripts/build_notebooks.sh` and commit both the source and the
+regenerated notebook.
 
 Tests use:
 
 - `pytest` with a local Delta-enabled `SparkSession` fixture
   (`tests/conftest.py`), built via `configure_spark_with_delta_pip`.
-- `fake_mssparkutils` fixture that installs configurable stand-ins for
-  the `mssparkutils` and `notebookutils.mssparkutils` import paths via
-  `monkeypatch.setitem(sys.modules, ...)`, so unit tests run without
-  Synapse.
+- `fake_mssparkutils` fixture that installs configurable stand-ins
+  for the `mssparkutils` and `notebookutils.mssparkutils` import paths
+  via `monkeypatch.setitem(sys.modules, ...)`, so unit tests run
+  without Synapse.
 
 ## Project layout
 
@@ -169,25 +140,23 @@ Tests use:
 src/spark_az/
 ├── __init__.py             # public surface re-exports
 ├── session.py              # get_spark / set_spark — never calls getOrCreate
-└── lgr.py      # ChildSpec / ChildResult / run_child / run_pipeline / ensure_log_table
+└── lgr.py                  # ChildSpec / ChildResult / run_child / run_pipeline / step / ...
 
 notebooks/
-├── lgr_starter.{py,ipynb}         # polished drop-in: params, JSON logging, App Insights, step()
-├── lgr.{py,ipynb}          # thin wrapper, imports installed library
-└── lgr_inline.{py,ipynb}   # entire library inline — %run-able with zero install
+└── lgr.{py,ipynb}          # all-in-one drop-in notebook (auto-inlined from src/)
 
 synapse/
-└── lgr_starter_pipeline.json              # reference Synapse pipeline JSON wiring lgr_starter
+└── lgr_pipeline.json       # reference Synapse pipeline JSON wiring lgr
 
 scripts/
 ├── setup.sh                # editable install of test+dev extras
-├── build.sh                # wheel build
 ├── test.sh                 # pytest wrapper
-└── build_notebooks.sh      # jupytext --to ipynb notebooks/*.py
+├── build_notebooks.sh      # inline_lgr_notebook.py + jupytext --to ipynb
+└── inline_lgr_notebook.py  # builds notebooks/lgr.py from src/spark_az/
 
 docs/superpowers/
-├── specs/2026-05-21-pipeline-logger-design.md   # locked-decision design
-└── plans/2026-05-21-pipeline-logger.md          # task-by-task implementation plan
+├── specs/                  # locked-decision design docs (v1, v2)
+└── plans/                  # task-by-task implementation plans
 ```
 
 See `AGENTS.md` for the honesty contract every contributor (human or

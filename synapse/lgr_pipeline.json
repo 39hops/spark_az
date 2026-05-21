@@ -1,10 +1,10 @@
 {
-  "name": "spark_az_starter_pipeline",
+  "name": "spark_az_lgr_pipeline",
   "properties": {
-    "description": "Drives notebooks/_logging/lgr_starter.ipynb with the spark_az parameter contract. Import into Synapse Studio, set the referenceName below to whatever you named the imported lgr_starter notebook, then customise the 'notebooks' parameter default.",
+    "description": "Drives notebooks/lgr.ipynb with the spark_az parameter contract. Import into Synapse Studio, set the referenceName below to whatever you named the imported lgr notebook, then customise the 'notebooks' parameter default.",
     "activities": [
       {
-        "name": "run_starter",
+        "name": "run_lgr",
         "type": "SynapseNotebook",
         "dependsOn": [],
         "policy": {
@@ -17,7 +17,7 @@
         "userProperties": [],
         "typeProperties": {
           "notebook": {
-            "referenceName": "lgr_starter",
+            "referenceName": "lgr",
             "type": "NotebookReference"
           },
           "parameters": {
