@@ -27,3 +27,8 @@ include = ["spark_az*"]
 
 [tool.setuptools.package-data]
 spark_az = ["py.typed"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src"]
+reportMissingImports = "warning"
