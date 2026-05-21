@@ -1,7 +1,7 @@
 {
   "name": "spark_az_lgr_pipeline",
   "properties": {
-    "description": "Drives notebooks/lgr.ipynb with the spark_az parameter contract. Import into Synapse Studio, set the referenceName below to whatever you named the imported lgr notebook, then customise the 'notebooks' parameter default.",
+    "description": "Drives notebooks/lgr.ipynb. Set the notebooks parameter below to your real workspace notebook paths before triggering.",
     "activities": [
       {
         "name": "run_lgr",
@@ -22,17 +22,11 @@
           },
           "parameters": {
             "pipeline_run_id": {
-              "value": {
-                "value": "@pipeline().RunId",
-                "type": "Expression"
-              },
+              "value": "@pipeline().RunId",
               "type": "string"
             },
             "pipeline_name": {
-              "value": {
-                "value": "@pipeline().Pipeline",
-                "type": "Expression"
-              },
+              "value": "@pipeline().Pipeline",
               "type": "string"
             },
             "log_table": {
