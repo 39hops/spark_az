@@ -505,6 +505,61 @@ def run_child(
     }
 
 
+def _append_rows(table: str, results: List[ChildResult]) -> None:
+    """Append a batch of :class:`ChildResult` rows to ``table``.
+
+    Stamps ``audited_at = current_timestamp()`` at write time. One Delta
+    commit per call regardless of batch size — same trick as
+    ``SyncState.upsert_all`` in spark_lib.
+
+    Args:
+        table: Fully-qualified managed Delta table name.
+        results: Rows to append. Empty list is a no-op.
+
+    Examples:
+        >>> _append_rows("lab.__pipeline_runlog", [...])
+    """
+    if not results:
+        return
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import StringType, StructField, StructType
+
+    spark: Any = get_spark()
+    write_schema: StructType = StructType(
+        [
+            StructField(name, _string_or_long(type_name), False)
+            for name, type_name in LOG_SCHEMA_FIELDS
+            if name not in {"audited_at", "started_at", "finished_at"}
+        ]
+        + [
+            StructField("started_at", StringType(), False),
+            StructField("finished_at", StringType(), False),
+        ]
+    )
+    column_order: List[str] = [f.name for f in write_schema.fields]
+    rows: List[Dict[str, Any]] = [
+        {name: r[name] for name in column_order} for r in results
+    ]
+    df = spark.createDataFrame(rows, write_schema).select(
+        *[
+            F.to_timestamp(F.col(c)).alias(c)
+            if c in {"started_at", "finished_at"}
+            else F.col(c)
+            for c in column_order
+        ]
+    ).withColumn("audited_at", F.current_timestamp())
+    df.write.format("delta").mode("append").saveAsTable(table)
+
+
+def _string_or_long(type_name: str) -> Any:
+    """Map our schema type names to Spark types for the staging frame."""
+    from pyspark.sql.types import LongType, StringType
+
+    if type_name == "long":
+        return LongType()
+    return StringType()
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",
