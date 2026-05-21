@@ -2,5 +2,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip build
 python -m pip install -e ".[test,dev]"
