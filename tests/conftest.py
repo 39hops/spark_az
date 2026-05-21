@@ -77,6 +77,7 @@ def fake_mssparkutils(monkeypatch: pytest.MonkeyPatch) -> FakeMssparkutils:
 @pytest.fixture(scope="session")
 def spark(tmp_path_factory: pytest.TempPathFactory) -> Any:
     """Local Delta-enabled SparkSession for integration tests."""
+    from delta.pip_utils import configure_spark_with_delta_pip
     from pyspark.sql import SparkSession
 
     warehouse: str = str(tmp_path_factory.mktemp("spark-warehouse"))
@@ -94,6 +95,7 @@ def spark(tmp_path_factory: pytest.TempPathFactory) -> Any:
         )
         .config("spark.ui.enabled", "false")
     )
+    builder = configure_spark_with_delta_pip(builder)
     session: Any = builder.getOrCreate()
     try:
         yield session

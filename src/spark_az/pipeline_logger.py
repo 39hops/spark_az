@@ -30,6 +30,8 @@ from typing import (
     TypedDict,
 )
 
+from .session import get_spark
+
 if TYPE_CHECKING:
     from pyspark.sql.types import StructType
 
@@ -192,8 +194,33 @@ def _nbutils() -> Any:
             )
 
 
+def ensure_log_table(table: str) -> None:
+    """Create the log Delta table if it does not exist.
+
+    Idempotent. Mirrors :meth:`SyncState.ensure` in spark_lib: checks
+    ``spark.catalog.tableExists(table)``; otherwise writes an empty
+    DataFrame with :func:`_log_schema` as a managed Delta table.
+
+    Args:
+        table: Fully-qualified managed Delta table name.
+
+    Examples:
+        >>> ensure_log_table("lab.__pipeline_runlog")
+    """
+    spark: Any = get_spark()
+    if spark.catalog.tableExists(table):
+        return
+    (
+        spark.createDataFrame([], _log_schema())
+        .write.format("delta")
+        .mode("overwrite")
+        .saveAsTable(table)
+    )
+
+
 __all__ = [
     "ChildResult",
     "ChildSpec",
     "LOG_SCHEMA_FIELDS",
+    "ensure_log_table",
 ]
