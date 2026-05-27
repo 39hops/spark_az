@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-BAD_CHAR: re.Pattern[str] = re.compile(r'[^a-zA-Z0-9_\-]')
-SKIP_DBS: Set[str] = {'default', 'information_schema'}
+BAD_CHAR: re.Pattern[str] = re.compile(r"[^a-zA-Z0-9_\-]")
+SKIP_DBS: Set[str] = {"default", "information_schema"}
 DEFAULT_WORKERS: int = 16
 
 
@@ -48,7 +48,7 @@ def list_table_pairs(
         try:
             tables = spark.catalog.listTables(db)
         except Exception as e:
-            print(f"  skipping db '{db}': {e}")
+            print(f"  skipping db \"{db}\": {e}")
             continue
         for tbl in tables:
             pairs.append((db, tbl.name))
@@ -76,7 +76,7 @@ def find_dirty_columns_in_table(
                 database=database,
                 table=table,
                 column=col.name,
-                bad_chars=''.join(sorted(set(bad))),
+                bad_chars="".join(sorted(set(bad))),
             ))
     return results
 
@@ -149,4 +149,4 @@ dirty_columns: List[DirtyColumn] = scan_workspace(spark, max_workers=16)
 result_df = report(spark, dirty_columns)
 
 # if result_df is not None:
-#     result_df.write.mode('overwrite').saveAsTable('audit.dirty_columns')
+#     result_df.write.mode("overwrite").saveAsTable("audit.dirty_columns")
