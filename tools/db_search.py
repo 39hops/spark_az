@@ -70,6 +70,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Dict, List, NamedTuple, Optional, Set, Tuple
 
 if TYPE_CHECKING:
+    import pandas as pd
     from pyspark.sql import Column, DataFrame, SparkSession
     from pyspark.sql.types import StructField
 
@@ -288,39 +289,17 @@ def list_table_pairs(
     return pairs
 
 
-def table_location(spark: "SparkSession", database: str, table: str) -> Optional[str]:
-    """Return a table's storage location via ``DESCRIBE FORMATTED``.
-
-    Args:
-        spark: Active SparkSession.
-        database: Database name.
-        table: Table name.
-
-    Returns:
-        The table's storage path, or ``None`` if it cannot be discovered.
-    """
-    try:
-        rows = spark.sql(f"DESCRIBE FORMATTED `{database}`.`{table}`").collect()
-    except Exception as exc:
-        LOGGER.warning("no DESCRIBE for %s.%s: %s", database, table, exc)
-        return None
-    for row in rows:
-        if (row["col_name"] or "").strip() == "Location":
-            return (row["data_type"] or "").strip() or None
-    return None
-
-
 def read_table(
     spark: "SparkSession",
     database: str,
     table: str,
 ) -> "Optional[DataFrame]":
-    """Read a table as parquet via its location, falling back to the catalog.
+    """Read a table through the catalog.
 
-    Reading the parquet path directly skips the metastore but is not
-    Delta-aware: a Delta table's folder may hold superseded parquet files, so
-    counts can be inflated. The catalog fallback (``spark.table``) keeps such
-    tables correct and also covers views and non-parquet formats.
+    ``spark.table`` reuses the schema the metastore already holds, so there is
+    no per-table ``DESCRIBE`` job and no parquet schema/partition re-inference
+    before the scan. It is also Delta-correct and covers views and
+    non-parquet formats.
 
     Args:
         spark: Active SparkSession.
@@ -330,17 +309,6 @@ def read_table(
     Returns:
         The table as a DataFrame, or ``None`` if it cannot be read.
     """
-    location: Optional[str] = table_location(spark, database, table)
-    if location:
-        try:
-            return spark.read.parquet(location)
-        except Exception as exc:
-            LOGGER.warning(
-                "parquet read failed for %s.%s (%s); using table read",
-                database,
-                table,
-                exc,
-            )
     try:
         return spark.table(f"`{database}`.`{table}`")
     except Exception as exc:
@@ -355,9 +323,10 @@ class TableResult(NamedTuple):
         database: Database name.
         table: Table name.
         matched_columns: Columns any search term could match.
-        row_count: Number of matched rows.
+        row_count: Number of matched rows collected (capped by the sheet
+            limit; ``message`` notes any truncation).
         message: Human-readable summary of the match.
-        frame: The filtered (and optionally projected) DataFrame.
+        frame: The matched rows as a pandas DataFrame, ready to write.
     """
 
     database: str
@@ -365,7 +334,7 @@ class TableResult(NamedTuple):
     matched_columns: List[str]
     row_count: int
     message: str
-    frame: "DataFrame"
+    frame: "pd.DataFrame"
 
 
 def apply_date_range(
@@ -375,8 +344,10 @@ def apply_date_range(
 ) -> "DataFrame":
     """Filter rows to the ingestion window when the column is present.
 
-    The column is compared at day granularity (cast to ``date``), so both
-    bounds are inclusive even for a timestamp column.
+    The column is compared bare (no cast), so partition pruning and parquet
+    predicate pushdown still apply. The end bound is made exclusive of the
+    next day, which keeps the whole end day included even for a timestamp
+    column while leaving the predicate prunable.
 
     Args:
         df: The table being searched.
@@ -392,11 +363,13 @@ def apply_date_range(
     start, end = date_range
     if ingested_col not in df.columns:
         return df
-    ingested = F.col(ingested_col).cast("date")
     if start:
-        df = df.filter(ingested >= F.to_date(F.lit(start)))
+        df = df.filter(F.col(ingested_col) >= F.lit(start))
     if end:
-        df = df.filter(ingested <= F.to_date(F.lit(end)))
+        end_exclusive: str = (
+            dt.datetime.strptime(end, "%Y-%m-%d") + dt.timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        df = df.filter(F.col(ingested_col) < F.lit(end_exclusive))
     return df
 
 
@@ -410,8 +383,15 @@ def search_one_table(
     date_range: "Tuple[str, str]",
     case_sensitive: bool,
     project_matched_only: bool,
+    max_rows_per_sheet: int,
 ) -> Optional[TableResult]:
     """Search one table and return a :class:`TableResult` if rows match.
+
+    The matched rows are collected to the driver exactly once (one Spark
+    action per table); the row count comes from that result rather than a
+    separate ``count`` pass, so each table is scanned a single time. At most
+    ``max_rows_per_sheet`` rows are kept; one extra row is pulled only to
+    detect and flag truncation.
 
     Args:
         spark: Active SparkSession.
@@ -423,7 +403,9 @@ def search_one_table(
         date_range: ``(start, end)`` ISO bounds for the date filter.
         case_sensitive: Whether string matching respects case.
         project_matched_only: Keep only matched columns (plus the ingestion
-            column) in the result frame.
+            column), which also prunes the columns Spark reads.
+        max_rows_per_sheet: Row cap per table (Excel's hard limit is
+            1,048,576).
 
     Returns:
         A :class:`TableResult` with at least one matched row, or ``None``.
@@ -446,18 +428,25 @@ def search_one_table(
             keep.append(ingested_col)
         filtered = filtered.select(*keep)
 
-    count: int = filtered.count()
-    if count == 0:
+    frame = filtered.limit(max_rows_per_sheet + 1).toPandas()
+    if frame.empty:
         return None
 
-    message: str = f"{count} rows matched {cond.upper()} {words} in {matched}"
+    truncated: bool = len(frame) > max_rows_per_sheet
+    if truncated:
+        frame = frame.iloc[:max_rows_per_sheet]
+    count: int = len(frame)
+
+    note: str = " (truncated)" if truncated else ""
+    plus: str = "+" if truncated else ""
+    message: str = f"{count}{plus} rows matched {cond.upper()} {words} in {matched}{note}"
     return TableResult(
         database=database,
         table=table,
         matched_columns=matched,
         row_count=count,
         message=message,
-        frame=filtered,
+        frame=frame,
     )
 
 
@@ -471,6 +460,7 @@ def search_database(
     case_sensitive: bool = CASE_SENSITIVE,
     project_matched_only: bool = PROJECT_MATCHED_ONLY,
     max_workers: int = MAX_WORKERS,
+    max_rows_per_sheet: int = MAX_ROWS_PER_SHEET,
 ) -> List[TableResult]:
     """Search every table in the lake database concurrently for the terms.
 
@@ -487,6 +477,7 @@ def search_database(
         case_sensitive: Whether string matching respects case.
         project_matched_only: Keep only matched columns in each result frame.
         max_workers: Thread-pool size for the per-table scan.
+        max_rows_per_sheet: Row cap per matching table.
 
     Returns:
         One :class:`TableResult` per matching table.
@@ -513,6 +504,7 @@ def search_database(
                 date_range,
                 case_sensitive,
                 project_matched_only,
+                max_rows_per_sheet,
             ): (db, tbl)
             for db, tbl in pairs
         }
@@ -565,21 +557,17 @@ def write_workbook(
     results: List[TableResult],
     abfss_out: str,
     run_ts: "dt.datetime",
-    max_rows_per_sheet: int = MAX_ROWS_PER_SHEET,
 ) -> Optional[str]:
     """Write a summary sheet plus one sheet per matching table to abfss.
 
-    Each table's matched rows are collected to the driver with ``toPandas``
-    and written into a single ``.xlsx`` (engine ``openpyxl``), which is then
-    copied to ``abfss_out`` via ``mssparkutils.fs.cp``. Sheets exceeding
-    ``max_rows_per_sheet`` are truncated and the truncation is logged.
+    Each result already carries its matched rows as a pandas DataFrame, so
+    this step does no Spark work: it writes one ``.xlsx`` (engine
+    ``openpyxl``) and copies it to ``abfss_out`` via ``mssparkutils.fs.cp``.
 
     Args:
         results: Output of :func:`search_database`.
         abfss_out: Destination folder on the abfss container.
         run_ts: Timestamp stamped into the file name.
-        max_rows_per_sheet: Row cap per sheet (Excel's hard limit is
-            1,048,576).
 
     Returns:
         The destination path written, or ``None`` if there were no matches.
@@ -608,17 +596,8 @@ def write_workbook(
     with pd.ExcelWriter(local_path, engine="openpyxl") as writer:
         summary.to_excel(writer, sheet_name="summary", index=False)
         for result in results:
-            pdf = result.frame.limit(max_rows_per_sheet).toPandas()
             sheet: str = safe_sheet_name(f"{result.database}.{result.table}", used)
-            pdf.to_excel(writer, sheet_name=sheet, index=False)
-            if result.row_count > max_rows_per_sheet:
-                LOGGER.warning(
-                    "%s.%s truncated to %d of %d rows for Excel",
-                    result.database,
-                    result.table,
-                    max_rows_per_sheet,
-                    result.count,
-                )
+            result.frame.to_excel(writer, sheet_name=sheet, index=False)
 
     dest: str = abfss_out.rstrip("/") + "/" + filename
     mssparkutils.fs.cp(f"file:{local_path}", dest)
@@ -628,10 +607,13 @@ def write_workbook(
 
 # %% [markdown]
 # ## Run
-# `spark` and `mssparkutils` are provided by Synapse. On some runtimes
-# `mssparkutils` must be imported first with
-# `from notebookutils import mssparkutils`.
+# Arrow makes the per-table `toPandas` collection fast. `spark` and
+# `mssparkutils` are provided by Synapse; on some runtimes `mssparkutils`
+# must be imported first with `from notebookutils import mssparkutils`.
 
 # %%
+spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
+spark.conf.set("spark.sql.execution.arrow.pyspark.fallback.enabled", "true")
+
 results: "List[TableResult]" = search_database(spark)
 out_path: Optional[str] = write_workbook(results, ABFSS_OUT, dt.datetime.now())
