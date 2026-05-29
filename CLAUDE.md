@@ -46,9 +46,23 @@ scripts/test.sh
 # Build — produces dist/spark_az-0.1.0-py3-none-any.whl
 scripts/build.sh
 
-# Notebook build — regenerate notebooks/*.ipynb from jupytext .py sources
+# Notebook build — sync notebooks/lgr + tools/db_search .ipynb from .py sources
 scripts/build_notebooks.sh
 ```
+
+## Workspace utilities
+
+Standalone Synapse paste-in tools under `tools/`, independent of the
+orchestrator and of any install:
+
+- `tools/db.py` — audits every database for column names with characters
+  outside `[a-zA-Z0-9_-]` (the ones that block Lake Database publish).
+- `tools/db_search.{py,ipynb}` — searches every table for `SEARCH_WORDS`
+  (type-aware per column; `OR`/`AND`), optionally scoped by `SEARCH_DBS` and
+  an ingestion `DATE_RANGE`, writing matched rows to an abfss container as one
+  Excel sheet per table. Needs `pandas` + `openpyxl` on the pool.
+  `db_search.py` is jupytext-paired and built by `scripts/build_notebooks.sh`;
+  `db.py` is a plain script.
 
 ## Tech stack
 
