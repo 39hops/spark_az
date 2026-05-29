@@ -3,4 +3,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python scripts/inline_lgr_notebook.py
-find notebooks -name '*.py' -print0 | xargs -0 jupytext --to ipynb
+jupytext --sync notebooks/lgr.py tools/db_search.py

@@ -6,6 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
+#       jupytext_version: 1.19.3
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -473,7 +474,7 @@ def search_database(
 ) -> List[TableResult]:
     """Search every table in the lake database concurrently for the terms.
 
-    Mirrors ``scripts/db.py``: enumerate ``(database, table)`` pairs from the
+    Mirrors ``tools/db.py``: enumerate ``(database, table)`` pairs from the
     catalog, fan out across a thread pool, and collect the tables that match.
 
     Args:

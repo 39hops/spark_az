@@ -109,6 +109,25 @@ active `pipeline_run_id` attached. Step records currently land in
 stdout (and any attached handler) — they are not yet written to their
 own Delta table.
 
+## Workspace utilities
+
+Two standalone tools under `tools/` for inspecting a whole Lake Database,
+independent of the orchestrator and of any install — paste the file into a
+Synapse notebook cell (or import `tools/db_search.ipynb`), set the parameters
+at the top, and run. Both enumerate tables from the catalog and fan out across
+them with a thread pool.
+
+- **`tools/db.py`** — scans every database for column names containing
+  characters outside `[a-zA-Z0-9_-]`, the ones that block Lake Database
+  publish validation, and prints a report.
+- **`tools/db_search.{py,ipynb}`** — searches every table for values. Set
+  `SEARCH_WORDS` and `COND` (`OR`/`AND`); matching is type-aware per column
+  (string substring, numeric exact, ISO-date match). Optionally scope by
+  database (`SEARCH_DBS`) and by ingestion window (`DATE_RANGE` on
+  `INGESTED_COL`). Matched rows are written to the abfss container as one
+  Excel workbook — a summary sheet plus one sheet per table. Requires
+  `pandas` + `openpyxl` on the Spark pool.
+
 ## Local development
 
 The library lives at `src/spark_az/` with full pytest coverage.
@@ -151,8 +170,12 @@ synapse/
 scripts/
 ├── setup.sh                # editable install of test+dev extras
 ├── test.sh                 # pytest wrapper
-├── build_notebooks.sh      # inline_lgr_notebook.py + jupytext --to ipynb
+├── build_notebooks.sh      # inline_lgr_notebook.py + jupytext --sync
 └── inline_lgr_notebook.py  # builds notebooks/lgr.py from src/spark_az/
+
+tools/
+├── db.py                   # audit workspace column names for bad characters
+└── db_search.{py,ipynb}    # search every lake-database table for values
 
 docs/superpowers/
 ├── specs/                  # locked-decision design docs (v1, v2)
