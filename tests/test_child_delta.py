@@ -65,3 +65,37 @@ def test_notebook_exit_failed_status_records_error(
     assert "missing column" in row["error_message"]
     payload = json.loads(fake_mssparkutils.notebook.exit_value)
     assert payload["error_class"] == "ValueError"
+
+
+def test_log_run_appends_ok_row(spark: Any) -> None:
+    """log_run logs one ok self-row on a clean exit."""
+    from spark_az.child import log_run
+
+    table: str = "default.test_child_log_run_ok"
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+    with log_run(log_table=table, pipeline_run_id="run-7"):
+        pass
+
+    rows = spark.table(table).collect()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["pipeline_run_id"] == "run-7"
+    assert rows[0]["child_index"] == -1
+
+
+def test_log_run_appends_failed_row_and_reraises(spark: Any) -> None:
+    """log_run logs a failed self-row with the error, then re-raises."""
+    from spark_az.child import log_run
+
+    table: str = "default.test_child_log_run_failed"
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+    with pytest.raises(ValueError, match="kaboom"):
+        with log_run(log_table=table, pipeline_run_id="run-8"):
+            raise ValueError("kaboom")
+
+    row = spark.table(table).collect()[0]
+    assert row["status"] == "failed"
+    assert row["error_class"] == "ValueError"
+    assert "kaboom" in row["error_message"]

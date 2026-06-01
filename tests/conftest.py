@@ -126,6 +126,15 @@ def _reset_pipeline_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _reset_child_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reset child module-level singletons between tests."""
+    from spark_az import child as ch
+
+    monkeypatch.setattr(ch, "_logged_outcome", False, raising=False)
+    monkeypatch.setattr(ch, "_hook_registered", False, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _propagate_lgr_to_caplog(
     caplog: pytest.LogCaptureFixture,
 ) -> Any:

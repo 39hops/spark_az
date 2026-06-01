@@ -18,7 +18,7 @@ from .lgr import (
     step,
 )
 from .session import get_spark, set_spark
-from .child import notebook_exit
+from .child import install_logging, log_done, log_run, notebook_exit
 
 __all__ = [
     "ChildResult",
@@ -29,7 +29,10 @@ __all__ = [
     "ensure_log_table",
     "get_active_run_id",
     "get_spark",
+    "install_logging",
     "log",
+    "log_done",
+    "log_run",
     "notebook_exit",
     "read_pipeline_params",
     "run_child",

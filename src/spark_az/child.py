@@ -32,7 +32,8 @@ from __future__ import annotations
 import json
 import time
 import traceback
-from typing import Any, Dict, Optional
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, Optional
 
 from .lgr import (
     ChildResult,
@@ -243,4 +244,187 @@ def notebook_exit(
     _nbutils().notebook.exit(payload_json)
 
 
-__all__ = ["build_exit_payload", "notebook_exit"]
+_logged_outcome: bool = False
+_hook_registered: bool = False
+
+
+def _ipython() -> Any:
+    """Return the active IPython shell, or ``None`` outside IPython."""
+    try:
+        from IPython import get_ipython
+    except Exception:
+        return None
+    return get_ipython()
+
+
+def _ns_value(key: str, default: str) -> str:
+    """Read ``key`` from the notebook namespace, else ``default``.
+
+    The child's own parameters cell defines ``log_table`` /
+    ``pipeline_run_id`` / ``pipeline_name`` as globals, so :func:`log_done`
+    and the failure hook pick them up with no arguments.
+    """
+    shell: Any = _ipython()
+    if shell is not None:
+        value: Any = shell.user_ns.get(key, default)
+        return str(value) if value else default
+    return default
+
+
+def _log_outcome(
+    status: str,
+    *,
+    error: Optional[BaseException] = None,
+    log_table: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    fields: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Append one self-row describing THIS notebook's outcome.
+
+    ``log_table`` / ``pipeline_run_id`` default to the notebook-namespace
+    values (then the standard defaults) so callers can pass nothing.
+
+    Args:
+        status: ``"ok"`` | ``"failed"`` | free-form.
+        error: Optional caught exception recorded on the row.
+        log_table: Override the runlog table.
+        pipeline_run_id: Override the run id.
+        fields: Optional extra JSON fields recorded in the exit payload.
+    """
+    global _logged_outcome
+    table: str = log_table or _ns_value("log_table", "_meta.__pipeline_runlog")
+    run_id: str = (
+        pipeline_run_id
+        if pipeline_run_id is not None
+        else _ns_value("pipeline_run_id", "")
+    )
+    result: ChildResult = _self_result(
+        status=status,
+        pipeline_run_id=run_id,
+        pipeline_name=_ns_value("pipeline_name", ""),
+        child_index=-1,
+        exit_value=build_exit_payload(
+            status, pipeline_run_id=run_id, error=error, fields=fields
+        ),
+        args=None,
+        error=_format_error(error),
+    )
+    ensure_log_table(table)
+    _append_rows(table, [result])
+    _logged_outcome = True
+    log.info("logged status=%s to %s", status, table)
+
+
+def log_done(**fields: Any) -> None:
+    """Bottom line: record that this notebook finished OK.
+
+    Logs one ``status="ok"`` row (notebook name, duration,
+    ``pipeline_run_id``) to the runlog table, reading ``log_table`` /
+    ``pipeline_run_id`` from the notebook's parameters cell so the common
+    case takes no arguments. A no-op if an outcome was already logged (e.g.
+    the failure hook fired first).
+
+    Args:
+        **fields: Optional extra JSON fields to record on the row.
+
+    Examples:
+        >>> log_done()
+        >>> log_done(target="lake.orders")
+    """
+    if _logged_outcome:
+        return
+    _log_outcome("ok", fields=fields or None)
+
+
+def _on_cell(result: Any) -> None:
+    """``post_run_cell`` callback: log a failed row on the first cell error.
+
+    Observational only — it never swallows the exception, so the notebook
+    still fails and the pipeline still sees it. Its own errors are swallowed
+    so logging can never mask the original exception.
+
+    Args:
+        result: The IPython ``ExecutionResult``; ``error_in_exec`` holds the
+            cell's exception or ``None``.
+    """
+    if _logged_outcome:
+        return
+    error: Optional[BaseException] = getattr(result, "error_in_exec", None)
+    if error is None:
+        return
+    try:
+        _log_outcome("failed", error=error)
+    except Exception as exc:
+        log.warning("auto-log of failure could not write: %s", exc)
+
+
+def install_logging() -> None:
+    """Top line: start the timer and arm automatic failure logging.
+
+    Records the run start (durations measure from here) and, under
+    IPython/Synapse, registers a ``post_run_cell`` hook that logs a
+    ``status="failed"`` row if any later cell raises — the case a bottom-line
+    call can't catch, since the crash stops the notebook before it. Outside
+    IPython (plain scripts / tests) it only resets the timer.
+
+    Idempotent: the hook registers at most once per session. Called for you
+    from ``lgr_child``'s ``%run`` setup cell, so a notebook's two lines are
+    ``%run`` at the top and :func:`log_done` at the end.
+    """
+    global _hook_registered, _logged_outcome
+    global _child_started_mono, _child_started_iso
+    _logged_outcome = False
+    _child_started_mono = time.monotonic()
+    _child_started_iso = _now_iso()
+    shell: Any = _ipython()
+    if shell is None:
+        return
+    if not _hook_registered:
+        shell.events.register("post_run_cell", _on_cell)
+        _hook_registered = True
+
+
+@contextmanager
+def log_run(
+    log_table: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+) -> Iterator[None]:
+    """Wrap a notebook body to log ok/failed + duration whether it crashes.
+
+    The robust alternative to the ``%run`` + :func:`log_done` hook when the
+    IPython hook can't be used: plain ``try`` / re-raise semantics that work
+    in any runtime. Logs ``status="ok"`` on a clean exit, ``status="failed"``
+    with the error on an exception (then re-raises so the notebook fails).
+
+    Args:
+        log_table: Optional runlog-table override.
+        pipeline_run_id: Optional run-id override.
+
+    Examples:
+        >>> with log_run():
+        ...     do_work()
+    """
+    global _logged_outcome, _child_started_mono, _child_started_iso
+    _logged_outcome = False
+    _child_started_mono = time.monotonic()
+    _child_started_iso = _now_iso()
+    try:
+        yield
+    except BaseException as exc:
+        _log_outcome(
+            "failed",
+            error=exc,
+            log_table=log_table,
+            pipeline_run_id=pipeline_run_id,
+        )
+        raise
+    _log_outcome("ok", log_table=log_table, pipeline_run_id=pipeline_run_id)
+
+
+__all__ = [
+    "build_exit_payload",
+    "install_logging",
+    "log_done",
+    "log_run",
+    "notebook_exit",
+]

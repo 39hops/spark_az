@@ -79,44 +79,47 @@ _JUPYTEXT_HEADER: str = """# ---
 _SETUP_USAGE_CELLS: str = '''
 # %% [markdown]
 # ## Setup
-# Turn on JSON-structured stdout logging for the child.
+# Turn on JSON logging and arm automatic failure logging for this notebook.
 
 # %%
 set_json_formatter()
+install_logging()
 
 # %% [markdown]
 # ## Usage (reference — this runs in the child, not here)
-# In the child notebook, AFTER its own parameters cell:
+# Two lines per notebook. First, at the very top:
 #
 # ```python
 # %run /Shared/lgr_child
-#
-# with step("write_orders"):
-#     write_target()
-#
-# notebook_exit(
-#     "ok",
-#     log_table=log_table,
-#     pipeline_run_id=pipeline_run_id,
-#     target="lake.orders",
-# )
 # ```
 #
-# Attach any JSON-serialisable fields you want the pipeline to see; for row
-# counts read Delta write metrics, not a costly `count()`. Wrap risky work to
-# self-log a failure row and still hand the pipeline a structured result:
+# ...your existing cells, untouched... then as the LAST line:
 #
 # ```python
-# try:
-#     run_the_work()
-#     notebook_exit("ok", log_table=log_table, pipeline_run_id=pipeline_run_id)
-# except Exception as exc:
-#     notebook_exit("failed", log_table=log_table,
-#                   pipeline_run_id=pipeline_run_id, error=exc)
+# log_done()
 # ```
 #
-# The pipeline reads the structured result back with:
-# `@json(activity('<child>').output.status.Output.result.exitValue).status`
+# `log_done()` writes one row to `_meta.__pipeline_runlog` with status,
+# duration, and notebook name (plus `pipeline_run_id` if your parameters cell
+# defines it). If any cell in between raises, a `failed` row with the error is
+# logged automatically — you add nothing for that.
+#
+# Robust fallback, if the auto-capture hook ever misbehaves — wrap the body
+# instead of calling log_done():
+#
+# ```python
+# with log_run():
+#     ...your work...
+# ```
+#
+# Advanced — to also hand structured data back to the pipeline (read with
+# `@json(activity('<child>').output.status.Output.result.exitValue).<field>`),
+# end with notebook_exit() instead:
+#
+# ```python
+# notebook_exit("ok", log_table=log_table, pipeline_run_id=pipeline_run_id,
+#               target="lake.orders")
+# ```
 '''
 
 

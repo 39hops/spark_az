@@ -6,7 +6,7 @@ in ``tests/test_child_delta.py``; everything here runs without a session.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Set
 
 import pytest
 
@@ -107,3 +107,107 @@ def test_self_result_records_error() -> None:
     assert result["error_class"] == "ValueError"
     assert "missing column" in result["error_message"]
     assert "ValueError" in result["error_traceback"]
+
+
+def test_install_logging_noop_without_ipython(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import spark_az.child as ch
+
+    monkeypatch.setattr(ch, "_ipython", lambda: None)
+    ch.install_logging()
+    assert ch._hook_registered is False
+
+
+def test_log_done_writes_ok_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    import spark_az.child as ch
+
+    captured: Dict[str, Any] = {}
+    monkeypatch.setattr(ch, "_ipython", lambda: None)
+    monkeypatch.setattr(
+        ch, "ensure_log_table", lambda t: captured.__setitem__("table", t)
+    )
+    monkeypatch.setattr(
+        ch, "_append_rows", lambda t, rows: captured.__setitem__("rows", rows)
+    )
+
+    ch.log_done(target="lake.orders")
+
+    assert captured["table"] == "_meta.__pipeline_runlog"
+    row: Dict[str, Any] = captured["rows"][0]
+    assert row["status"] == "ok"
+    assert row["child_index"] == -1
+    assert row["duration_ms"] >= 0
+    assert json.loads(row["exit_value"])["target"] == "lake.orders"
+
+
+def test_failure_hook_logs_failed_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    import spark_az.child as ch
+
+    captured: Dict[str, Any] = {}
+    monkeypatch.setattr(ch, "_ipython", lambda: None)
+    monkeypatch.setattr(ch, "ensure_log_table", lambda t: None)
+    monkeypatch.setattr(
+        ch, "_append_rows", lambda t, rows: captured.__setitem__("rows", rows)
+    )
+
+    ch._on_cell(types.SimpleNamespace(error_in_exec=ValueError("boom")))
+
+    row: Dict[str, Any] = captured["rows"][0]
+    assert row["status"] == "failed"
+    assert row["error_class"] == "ValueError"
+    assert "boom" in row["error_message"]
+
+
+def test_failure_hook_ignores_clean_cell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import types
+
+    import spark_az.child as ch
+
+    calls: List[int] = []
+    monkeypatch.setattr(ch, "ensure_log_table", lambda t: None)
+    monkeypatch.setattr(ch, "_append_rows", lambda t, rows: calls.append(1))
+
+    ch._on_cell(types.SimpleNamespace(error_in_exec=None))
+
+    assert calls == []
+
+
+def test_outcome_logged_at_most_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    import types
+
+    import spark_az.child as ch
+
+    calls: List[int] = []
+    monkeypatch.setattr(ch, "_ipython", lambda: None)
+    monkeypatch.setattr(ch, "ensure_log_table", lambda t: None)
+    monkeypatch.setattr(ch, "_append_rows", lambda t, rows: calls.append(1))
+
+    ch.log_done()
+    ch._on_cell(types.SimpleNamespace(error_in_exec=ValueError("x")))
+    ch.log_done()
+
+    assert calls == [1]
+
+
+def test_log_run_logs_ok_then_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import spark_az.child as ch
+
+    rows: List[Any] = []
+    monkeypatch.setattr(ch, "_ipython", lambda: None)
+    monkeypatch.setattr(ch, "ensure_log_table", lambda t: None)
+    monkeypatch.setattr(ch, "_append_rows", lambda t, r: rows.extend(r))
+
+    with ch.log_run():
+        pass
+    assert rows[-1]["status"] == "ok"
+
+    with pytest.raises(ValueError, match="nope"):
+        with ch.log_run():
+            raise ValueError("nope")
+    assert rows[-1]["status"] == "failed"
+    assert rows[-1]["error_class"] == "ValueError"
