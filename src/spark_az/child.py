@@ -7,16 +7,14 @@ install::
 
     %run /Shared/lgr_child
 
-    with step("extract") as s:
-        df = read_source()
-        s.metric("rows", df.count())
+    with step("write_orders"):
+        write_target()
 
     notebook_exit(
         "ok",
         log_table=log_table,
         pipeline_run_id=pipeline_run_id,
-        rows=df.count(),
-        watermark="2026-06-01",
+        target="lake.orders",
     )
 
 :func:`notebook_exit` JSON-encodes its payload and hands it to the pipeline
@@ -94,7 +92,7 @@ def build_exit_payload(
             pipeline can correlate the result with its run.
         error: Optional caught exception; its class and message are added.
         fields: Arbitrary JSON-serialisable values to include (row counts,
-            watermarks, downstream-branching flags).
+            dataset names, downstream-branching flags).
 
     Returns:
         A compact, key-sorted JSON string.
@@ -201,7 +199,9 @@ def notebook_exit(
         write_log: When True (default), append one self-row before exiting.
             Set False to return a payload without touching Delta.
         **fields: Arbitrary JSON-serialisable values added to the payload —
-            row counts, watermarks, or flags downstream activities branch on.
+            dataset names, row counts, or flags downstream activities branch
+            on. For row counts, prefer Delta write metrics over a costly
+            ``count()``.
 
     Raises:
         ValueError: ``write_log`` is True but ``log_table`` is empty.

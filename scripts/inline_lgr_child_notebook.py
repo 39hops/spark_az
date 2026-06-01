@@ -91,21 +91,20 @@ set_json_formatter()
 # ```python
 # %run /Shared/lgr_child
 #
-# with step("extract") as s:
-#     df = read_source()
-#     s.metric("rows", df.count())
+# with step("write_orders"):
+#     write_target()
 #
 # notebook_exit(
 #     "ok",
 #     log_table=log_table,
 #     pipeline_run_id=pipeline_run_id,
-#     rows=df.count(),
-#     watermark="2026-06-01",
+#     target="lake.orders",
 # )
 # ```
 #
-# Wrap risky work to self-log a failure row and still hand the pipeline a
-# structured result:
+# Attach any JSON-serialisable fields you want the pipeline to see; for row
+# counts read Delta write metrics, not a costly `count()`. Wrap risky work to
+# self-log a failure row and still hand the pipeline a structured result:
 #
 # ```python
 # try:
@@ -117,7 +116,7 @@ set_json_formatter()
 # ```
 #
 # The pipeline reads the structured result back with:
-# `@json(activity('<child>').output.status.Output.result.exitValue).rows`
+# `@json(activity('<child>').output.status.Output.result.exitValue).status`
 '''
 
 

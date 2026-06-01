@@ -15,11 +15,11 @@ def test_build_exit_payload_basic() -> None:
     from spark_az.child import build_exit_payload
 
     payload: Dict[str, Any] = json.loads(
-        build_exit_payload("ok", fields={"rows": 10, "watermark": "2026-06-01"})
+        build_exit_payload("ok", fields={"rows": 10, "target": "lake.orders"})
     )
     assert payload["status"] == "ok"
     assert payload["rows"] == 10
-    assert payload["watermark"] == "2026-06-01"
+    assert payload["target"] == "lake.orders"
     assert "finished_at" in payload
 
 
@@ -45,14 +45,14 @@ def test_build_exit_payload_includes_run_id_and_error() -> None:
 def test_notebook_exit_write_log_false_calls_exit(fake_mssparkutils: Any) -> None:
     from spark_az.child import notebook_exit
 
-    notebook_exit("ok", write_log=False, rows=5, watermark="2026-06-01")
+    notebook_exit("ok", write_log=False, rows=5, target="lake.orders")
 
     raw: Any = fake_mssparkutils.notebook.exit_value
     assert raw is not None
     payload: Dict[str, Any] = json.loads(raw)
     assert payload["status"] == "ok"
     assert payload["rows"] == 5
-    assert payload["watermark"] == "2026-06-01"
+    assert payload["target"] == "lake.orders"
 
 
 def test_notebook_exit_requires_log_table_when_writing(

@@ -1,18 +1,12 @@
 {
   "name": "spark_az_child_pipeline",
   "properties": {
-    "description": "Default pipeline showing the two-way notebook<->pipeline contract. The child notebook %runs lgr_child and ends with notebook_exit(...), which JSON-encodes a structured result into the activity exitValue. This pipeline passes parameters IN (pipeline_run_id / pipeline_name / log_table / run_date) and reads structured fields back OUT via @json(activity('run_child').output.status.Output.result.exitValue).<field>. pipeline_run_id flows through as @pipeline().RunId so the child's self-logged Delta row joins the orchestrator's runlog table. Import into Synapse Studio, set run_child.referenceName to your child notebook, then publish.",
-    "parameters": {
-      "run_date": {
-        "type": "string",
-        "defaultValue": ""
-      }
-    },
+    "description": "Default pipeline showing the two-way notebook<->pipeline contract. The child notebook %runs lgr_child and ends with notebook_exit(...), which JSON-encodes a structured result into the activity exitValue. This pipeline passes parameters IN (pipeline_run_id / pipeline_name / log_table) and reads structured fields back OUT via @json(activity('run_child').output.status.Output.result.exitValue).<field>. pipeline_run_id flows through as @pipeline().RunId so the child's self-logged Delta row joins the orchestrator's runlog table. Import into Synapse Studio, set run_child.referenceName to your child notebook, then publish.",
     "variables": {
       "child_status": {
         "type": "String"
       },
-      "child_rows": {
+      "child_target": {
         "type": "String"
       }
     },
@@ -52,13 +46,6 @@
             "log_table": {
               "value": "_meta.__pipeline_runlog",
               "type": "string"
-            },
-            "run_date": {
-              "value": {
-                "value": "@pipeline().parameters.run_date",
-                "type": "Expression"
-              },
-              "type": "string"
             }
           }
         }
@@ -82,7 +69,7 @@
         }
       },
       {
-        "name": "capture_child_rows",
+        "name": "capture_child_target",
         "type": "SetVariable",
         "dependsOn": [
           {
@@ -92,9 +79,9 @@
         ],
         "userProperties": [],
         "typeProperties": {
-          "variableName": "child_rows",
+          "variableName": "child_target",
           "value": {
-            "value": "@string(json(activity('run_child').output.status.Output.result.exitValue).rows)",
+            "value": "@string(json(activity('run_child').output.status.Output.result.exitValue).target)",
             "type": "Expression"
           }
         }

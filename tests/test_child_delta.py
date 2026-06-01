@@ -28,7 +28,7 @@ def test_notebook_exit_appends_self_row(spark: Any, fake_mssparkutils: Any) -> N
         pipeline_run_id="run-9",
         pipeline_name="nightly",
         rows=7,
-        watermark="2026-06-01",
+        target="lake.orders",
     )
 
     rows = spark.table(table).orderBy("child_index").collect()
@@ -39,7 +39,7 @@ def test_notebook_exit_appends_self_row(spark: Any, fake_mssparkutils: Any) -> N
     assert rows[0]["audited_at"] is not None
     payload = json.loads(rows[0]["exit_value"])
     assert payload["rows"] == 7
-    assert payload["watermark"] == "2026-06-01"
+    assert payload["target"] == "lake.orders"
     assert fake_mssparkutils.notebook.exit_value is not None
 
 
