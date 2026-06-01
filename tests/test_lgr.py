@@ -520,6 +520,7 @@ def test_public_api_reexported_from_package_root() -> None:
         "get_active_run_id",
         "get_spark",
         "log",
+        "notebook_exit",
         "read_pipeline_params",
         "run_child",
         "run_pipeline",

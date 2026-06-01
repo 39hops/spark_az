@@ -18,6 +18,7 @@ class FakeNotebook:
 
     def __init__(self) -> None:
         self.calls: List[Dict[str, Any]] = []
+        self.exit_value: Optional[str] = None
         self.handler: Callable[..., Any] = lambda path, timeout, args: ""
 
     def run(
@@ -34,6 +35,10 @@ class FakeNotebook:
         }
         self.calls.append(recorded)
         return self.handler(path, timeout, args or {})
+
+    def exit(self, value: str = "") -> None:
+        """Record the value passed to ``mssparkutils.notebook.exit``."""
+        self.exit_value = value
 
 
 class FakeRuntimeContext:
